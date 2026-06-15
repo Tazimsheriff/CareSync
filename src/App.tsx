@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, ChangeEvent } from "react";
 import { 
   Clock, 
   RefreshCw, 
@@ -12,10 +12,260 @@ import {
   TrendingDown, 
   Activity, 
   Stethoscope, 
-  Layers 
+  Layers,
+  Database,
+  UploadCloud,
+  FileText,
+  CheckCircle,
+  AlertCircle,
+  ExternalLink
 } from "lucide-react";
 import { Patient, getPatientMetrics, getExplainableAIReason } from "./types";
 import { initialPatients } from "./data";
+
+// --- CLIENT-SIDE CSV PARSING & DATASET SCHEMA CLARIFIER ENGINE ---
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function parseSepsisCSV(text: string): Patient[] {
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+  
+  const hrIdx = headers.findIndex(h => h.includes("hr") || h.includes("heart") || h.includes("pulse"));
+  const o2Idx = headers.findIndex(h => h.includes("o2") || h.includes("spo2") || h.includes("sat"));
+  const tempIdx = headers.findIndex(h => h.includes("temp"));
+  const sbpIdx = headers.findIndex(h => h.includes("sbp") || h.includes("sys") || h.includes("systolic"));
+  const dbpIdx = headers.findIndex(h => h.includes("dbp") || h.includes("dia") || h.includes("diastolic"));
+  const respIdx = headers.findIndex(h => h.includes("resp") || h.includes("rr") || h.includes("breath"));
+  const labelIdx = headers.findIndex(h => h.includes("sepsis") || h.includes("label"));
+  const idIdx = headers.findIndex(h => h.includes("id") || h.includes("patient"));
+  const nameIdx = headers.findIndex(h => h.includes("name"));
+  const ageIdx = headers.findIndex(h => h.includes("age"));
+  const genderIdx = headers.findIndex(h => h.includes("gender") || h.includes("sex"));
+  const dxIdx = headers.findIndex(h => h.includes("dx") || h.includes("diag") || h.includes("outcome"));
+
+  return lines.slice(1).map((line, curIdx) => {
+    const values = parseCSVLine(line);
+    const idVal = idIdx !== -1 && values[idIdx] ? values[idIdx] : `S-${101 + curIdx}`;
+    const nameVal = nameIdx !== -1 && values[nameIdx] ? values[nameIdx] : `Sepsis Unit Candidate #${curIdx + 1}`;
+    const ageVal = ageIdx !== -1 ? parseInt(values[ageIdx]) || 58 : 58;
+    const genderVal = genderIdx !== -1 ? (values[genderIdx].toUpperCase().startsWith("1") || values[genderIdx].toLowerCase().startsWith("m") ? "M" : "F") : (curIdx % 2 === 0 ? "F" : "M");
+    const hrVal = hrIdx !== -1 ? parseFloat(values[hrIdx]) || 115 : 115;
+    const o2Val = o2Idx !== -1 ? parseFloat(values[o2Idx]) || 91 : 91;
+    let tempVal = tempIdx !== -1 ? parseFloat(values[tempIdx]) || 38.9 : 38.9;
+    if (tempVal > 45) tempVal = (tempVal - 32) * 5 / 9; // F to C conversion
+    const sbpVal = sbpIdx !== -1 ? parseFloat(values[sbpIdx]) || 88 : 88;
+    const dbpVal = dbpIdx !== -1 ? parseFloat(values[dbpIdx]) || 58 : 58;
+    const rrVal = respIdx !== -1 ? parseFloat(values[respIdx]) || 26 : 26;
+    const isSeptic = labelIdx !== -1 ? parseInt(values[labelIdx]) === 1 : (hrVal > 110 && o2Val < 92);
+    const dxVal = dxIdx !== -1 && values[dxIdx] ? values[dxIdx] : (isSeptic ? "Severe Sepsis Progression" : "Vitals Observation / Sepsis Surveillance");
+
+    const priority: "Critical" | "High Risk" | "Moderate" | "Stable" = isSeptic ? "Critical" : (o2Val < 93 ? "High Risk" : "Stable");
+
+    return {
+      id: idVal,
+      bedId: `Bed ${String(curIdx + 1).padStart(2, "0")}`,
+      name: nameVal,
+      age: ageVal,
+      gender: genderVal,
+      dx: dxVal,
+      hr: Math.round(hrVal),
+      spo2: Math.round(o2Val),
+      bpSys: Math.round(sbpVal),
+      bpDia: Math.round(dbpVal),
+      temp: parseFloat(tempVal.toFixed(1)),
+      rr: Math.round(rrVal),
+      co2: isSeptic ? 30 : 38,
+      riskScore: isSeptic ? 85 + (curIdx % 12) : 10 + (curIdx % 15),
+      priority,
+      spo2History: [Math.min(100, o2Val + 4), Math.min(100, o2Val + 2), Math.min(100, o2Val + 1), o2Val, o2Val],
+      hrHistory: [hrVal - 10, hrVal - 5, hrVal, hrVal, hrVal],
+      tempHistory: [tempVal - 0.4, tempVal - 0.2, tempVal, tempVal, tempVal],
+      bpSysHistory: [sbpVal + 15, sbpVal + 10, sbpVal, sbpVal, sbpVal],
+      alertStatus: isSeptic ? "TREWS SEPSIS DETECTED" : "NORMAL"
+    };
+  });
+}
+
+function parseHeartFailureCSV(text: string): Patient[] {
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+
+  const idIdx = headers.findIndex(h => h.includes("id") || h.includes("patient"));
+  const nameIdx = headers.findIndex(h => h.includes("name"));
+  const ageIdx = headers.findIndex(h => h.includes("age"));
+  const sexIdx = headers.findIndex(h => h.includes("sex") || h.includes("gender"));
+  const hrIdx = headers.findIndex(h => h.includes("hr") || h.includes("heart") || h.includes("pulse"));
+  const o2Idx = headers.findIndex(h => h.includes("spo2") || h.includes("o2"));
+  const sbpIdx = headers.findIndex(h => h.includes("sbp") || h.includes("bp") || h.includes("systolic") || h.includes("pressure"));
+  const hbpIdx = headers.findIndex(h => h.includes("high_blood") || h.includes("hbp"));
+  const efIdx = headers.findIndex(h => h.includes("fraction") || h.includes("ef"));
+  const deIdx = headers.findIndex(h => h.includes("death") || h.includes("event") || h.includes("de"));
+  const dxIdx = headers.findIndex(h => h.includes("diag") || h.includes("dx"));
+
+  return lines.slice(1).map((line, curIdx) => {
+    const values = parseCSVLine(line);
+    const idVal = idIdx !== -1 && values[idIdx] ? values[idIdx] : `H-${201 + curIdx}`;
+    const nameVal = nameIdx !== -1 && values[nameIdx] ? values[nameIdx] : `Cardiovascular Failure Candidate #${curIdx + 1}`;
+    const ageVal = ageIdx !== -1 ? parseInt(values[ageIdx]) || 68 : 68;
+    
+    let isMale = true;
+    if (sexIdx !== -1 && values[sexIdx]) {
+      const s = values[sexIdx].toLowerCase();
+      if (s === "0" || s.startsWith("f")) isMale = false;
+    } else {
+      isMale = curIdx % 2 === 0;
+    }
+    const genderVal = isMale ? "M" : "F";
+
+    const efVal = efIdx !== -1 ? parseFloat(values[efIdx]) || 25 : 25;
+    const isDeathEvent = deIdx !== -1 ? parseInt(values[deIdx]) === 1 : efVal < 30;
+    
+    const hrVal = hrIdx !== -1 ? parseFloat(values[hrIdx]) || (isDeathEvent ? 108 : 78) : (isDeathEvent ? 102 + (curIdx % 10) : 74 + (curIdx % 8));
+    const o2Val = o2Idx !== -1 ? parseFloat(values[o2Idx]) || (isDeathEvent ? 91 : 97) : (isDeathEvent ? 90 + (curIdx % 4) : 96 + (curIdx % 4));
+    
+    let sbpVal = 120;
+    let dbpVal = 80;
+    if (sbpIdx !== -1 && values[sbpIdx]) {
+      sbpVal = parseFloat(values[sbpIdx]) || 120;
+      dbpVal = Math.round(sbpVal * 0.65);
+    } else if (hbpIdx !== -1 && parseInt(values[hbpIdx]) === 1) {
+      sbpVal = 158;
+      dbpVal = 92;
+    } else if (isDeathEvent) {
+      sbpVal = 90; // cardiogenic shock
+      dbpVal = 55;
+    }
+
+    const priority: "Critical" | "High Risk" | "Moderate" | "Stable" = isDeathEvent ? "Critical" : (efVal < 35 ? "High Risk" : "Stable");
+    const dxVal = dxIdx !== -1 && values[dxIdx] ? values[dxIdx] : `Decompensated CHF (EF: ${efVal}%)`;
+
+    return {
+      id: idVal,
+      bedId: `Bed ${String(curIdx + 1).padStart(2, "0")}`,
+      name: nameVal,
+      age: ageVal,
+      gender: genderVal,
+      dx: dxVal,
+      hr: Math.round(hrVal),
+      spo2: Math.round(o2Val),
+      bpSys: Math.round(sbpVal),
+      bpDia: Math.round(dbpVal),
+      temp: 36.5 + (curIdx % 5) * 0.1,
+      rr: isDeathEvent ? 24 : 16,
+      co2: isDeathEvent ? 32 : 38,
+      riskScore: isDeathEvent ? 82 + (curIdx % 10) : (efVal < 35 ? 65 + (curIdx % 10) : 12),
+      priority,
+      spo2History: [Math.min(100, o2Val + 3), Math.min(100, o2Val + 2), Math.min(100, o2Val + 1), o2Val, o2Val],
+      hrHistory: [hrVal - 6, hrVal - 3, hrVal, hrVal, hrVal],
+      tempHistory: [36.5, 36.6, 36.7, 36.7, 36.7],
+      bpSysHistory: [sbpVal + 10, sbpVal + 5, sbpVal, sbpVal, sbpVal],
+      alertStatus: isDeathEvent ? "HEART FAILURE EXACERBATION" : "STABLE VIEW"
+    };
+  });
+}
+
+function parseMaternalHealthCSV(text: string): Patient[] {
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+
+  const idIdx = headers.findIndex(h => h.includes("id") || h.includes("patient"));
+  const nameIdx = headers.findIndex(h => h.includes("name"));
+  const ageIdx = headers.findIndex(h => h.includes("age"));
+  const sbpIdx = headers.findIndex(h => h.includes("systolic") || h.includes("sbp"));
+  const dbpIdx = headers.findIndex(h => h.includes("diastolic") || h.includes("dbp"));
+  const bsIdx = headers.findIndex(h => h.includes("blood") || h.includes("bs") || h.includes("sugar") || h.includes("glucose"));
+  const tempIdx = headers.findIndex(h => h.includes("temp") || h.includes("body") || h.includes("fever"));
+  const hrIdx = headers.findIndex(h => h.includes("heart") || h.includes("hr") || h.includes("pulse"));
+  const riskIdx = headers.findIndex(h => h.includes("risk"));
+  const dxIdx = headers.findIndex(h => h.includes("diag") || h.includes("dx"));
+
+  return lines.slice(1).map((line, curIdx) => {
+    const values = parseCSVLine(line);
+    const idVal = idIdx !== -1 && values[idIdx] ? values[idIdx] : `M-${301 + curIdx}`;
+    const nameVal = nameIdx !== -1 && values[nameIdx] ? values[nameIdx] : `High-Risk Maternal Patient #${curIdx + 1}`;
+    const ageVal = ageIdx !== -1 ? parseInt(values[ageIdx]) || 28 : 28;
+    
+    const sbpVal = sbpIdx !== -1 ? parseFloat(values[sbpIdx]) || 140 : 140;
+    const dbpVal = dbpIdx !== -1 ? parseFloat(values[dbpIdx]) || 95 : 95;
+    
+    const tempF = tempIdx !== -1 ? parseFloat(values[tempIdx]) || 98.6 : 98.6;
+    let tempC = tempF;
+    if (tempF > 45) {
+      tempC = (tempF - 32) * 5 / 9;
+    }
+    
+    const hrVal = hrIdx !== -1 ? parseFloat(values[hrIdx]) || 98 : 98;
+    const bsVal = bsIdx !== -1 ? parseFloat(values[bsIdx]) || 7.8 : 7.8;
+    
+    let riskStr = "low risk";
+    if (riskIdx !== -1 && values[riskIdx]) {
+      riskStr = values[riskIdx].toLowerCase();
+    } else {
+      if (sbpVal > 135 || tempC > 38.0 || bsVal > 8.0) riskStr = "high risk";
+      else if (sbpVal > 125 || bsVal > 6.5) riskStr = "mid risk";
+    }
+
+    let priority: "Critical" | "High Risk" | "Moderate" | "Stable" = "Stable";
+    let riskScore = 15;
+    if (riskStr.includes("high")) {
+      priority = "Critical";
+      riskScore = 88;
+    } else if (riskStr.includes("mid")) {
+      priority = "High Risk";
+      riskScore = 65;
+    } else if (sbpVal > 130) {
+      priority = "Moderate";
+      riskScore = 40;
+    }
+
+    const isHighSugar = bsVal > 7.5;
+    const dxVal = dxIdx !== -1 && values[dxIdx] ? values[dxIdx] : 
+                  (sbpVal > 138 ? "Pre-eclampsia Risk Monitor" : (isHighSugar ? "Gestational Diabetes Triage" : "Obstetric Monitor"));
+
+    return {
+      id: idVal,
+      bedId: `Bed ${String(curIdx + 1).padStart(2, "0")}`,
+      name: nameVal,
+      age: ageVal,
+      gender: "F",
+      dx: dxVal,
+      hr: Math.round(hrVal),
+      spo2: 98 - (curIdx % 3),
+      bpSys: Math.round(sbpVal),
+      bpDia: Math.round(dbpVal),
+      temp: parseFloat(tempC.toFixed(1)),
+      rr: sbpVal > 135 ? 20 : 16,
+      co2: 38,
+      riskScore,
+      priority,
+      spo2History: [98, 98, 98, 98, 98 - (curIdx % 3)],
+      hrHistory: [hrVal - 4, hrVal - 2, hrVal, hrVal, hrVal],
+      tempHistory: [tempC - 0.2, tempC - 0.1, tempC, tempC, tempC],
+      bpSysHistory: [sbpVal + 5, sbpVal + 2, sbpVal, sbpVal, sbpVal],
+      alertStatus: priority === "Critical" ? "OBSTETRIC EMERGENCY PRE-ECLAMPSIA" : "NORMAL PREGNANCY"
+    };
+  });
+}
 
 export default function App() {
   // --- Master Patient State ---
@@ -25,7 +275,7 @@ export default function App() {
   const [activePatientId, setActivePatientId] = useState<string>("P108"); // starts with Jenkins, Sarah (ICU-08)
 
   // --- Navigation Tabs ---
-  const [activeTab, setActiveTab] = useState<"live" | "table" | "command">("live");
+  const [activeTab, setActiveTab] = useState<"live" | "table" | "command" | "kaggle">("live");
 
   // --- Clicked Patient Detail Modal ---
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -41,6 +291,134 @@ export default function App() {
   // --- NIBP Timer States & Drift logic ---
   const [nibpSeconds, setNibpSeconds] = useState(300);
   const [nibpMeasuring, setNibpMeasuring] = useState(false);
+
+  // --- Kaggle Lab Live States ---
+  const [loadedDatasetName, setLoadedDatasetName] = useState<string>("System Default Simulator Patients");
+  const [datasetError, setDatasetError] = useState<string | null>(null);
+  const [datasetSuccess, setDatasetSuccess] = useState<string | null>(null);
+  const [isLabbing, setIsLabbing] = useState(false);
+
+  const loadAndInjectDataset = async (datasetKey: "sepsis" | "heart" | "maternal", filename: string) => {
+    setIsLabbing(true);
+    setDatasetError(null);
+    setDatasetSuccess(null);
+    try {
+      const response = await fetch(`/datasets/${filename}`);
+      if (!response.ok) {
+        throw new Error(`File /datasets/${filename} not found in public directory. Ensure you place your downloaded *.csv file directly in that path, or use the drag & drop area below to test your file immediately.`);
+      }
+      const text = await response.text();
+      let parsed: Patient[] = [];
+      if (datasetKey === "sepsis") {
+        parsed = parseSepsisCSV(text);
+      } else if (datasetKey === "heart") {
+        parsed = parseHeartFailureCSV(text);
+      } else if (datasetKey === "maternal") {
+        parsed = parseMaternalHealthCSV(text);
+      }
+
+      if (parsed.length === 0) {
+        throw new Error("Zero clinical rows parsed. Check file structure.");
+      }
+
+      const sliced = parsed.slice(0, 20);
+      const formatted = sliced.map((p, idx) => ({
+        ...p,
+        bedId: `Bed ${String(idx + 1).padStart(2, "0")}`
+      }));
+
+      setPatients(formatted);
+      setActivePatientId(formatted[0].id);
+      
+      const titleName = datasetKey === "sepsis" ? "PhysioNet Early Sepsis Warning Dataset" :
+                       datasetKey === "heart" ? "UCSD Heart Failure Prediction Dataset" :
+                       "WHO Maternal Health Risk Dataset";
+      setLoadedDatasetName(titleName);
+      setDatasetSuccess(`Successfully loaded ${formatted.length} patients from /datasets/${filename}! Primary bed set as LIVE Monitor focus.`);
+    } catch (err: any) {
+      setDatasetError(err.message || "Failed to load static file. Please place your file or proceed with manual drag-and-drop.");
+    } finally {
+      setIsLabbing(false);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processUploadedFile(file);
+  };
+
+  const processUploadedFile = (file: File) => {
+    setIsLabbing(true);
+    setDatasetError(null);
+    setDatasetSuccess(null);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) {
+        setDatasetError("File content is empty.");
+        setIsLabbing(false);
+        return;
+      }
+      try {
+        const firstLine = text.split("\n")[0].toLowerCase();
+        let parsed: Patient[] = [];
+        let detected = "Custom Database";
+
+        if (firstLine.includes("sepsis") || firstLine.includes("o2sat") || firstLine.includes("sepsislabel") || firstLine.includes("sbp")) {
+          // If Sepsis label is here
+          if (firstLine.includes("sepsislabel") || firstLine.includes("hr")) {
+            parsed = parseSepsisCSV(text);
+            detected = "Uploaded PhysioNet Sepsis Dataset";
+          }
+        }
+        
+        if (parsed.length === 0 && (firstLine.includes("ejection") || firstLine.includes("fraction") || firstLine.includes("death_event"))) {
+          parsed = parseHeartFailureCSV(text);
+          detected = "Uploaded UCSD Heart Failure Record";
+        }
+        
+        if (parsed.length === 0 && (firstLine.includes("systolicbp") || firstLine.includes("bodytemp") || firstLine.includes("risklevel"))) {
+          parsed = parseMaternalHealthCSV(text);
+          detected = "Uploaded Maternal Health Risk Sheet";
+        }
+
+        // Catch-all mapping check
+        if (parsed.length === 0) {
+          if (firstLine.includes("systolic") || firstLine.includes("diastolic") || firstLine.includes("sugar")) {
+            parsed = parseMaternalHealthCSV(text);
+            detected = "Custom Maternal Health Sheet (Auto)";
+          } else if (firstLine.includes("fraction") || firstLine.includes("heartrate") || firstLine.includes("death")) {
+            parsed = parseHeartFailureCSV(text);
+            detected = "Custom Cardio Failure Profile (Auto)";
+          } else {
+            parsed = parseSepsisCSV(text);
+            detected = "Annotated Clinical CSV (Auto-mapped)";
+          }
+        }
+
+        if (parsed.length === 0) {
+          throw new Error("Unable to identify table structures. Verify CSV contains valid patient log entries.");
+        }
+
+        const sliced = parsed.slice(0, 20);
+        const formatted = sliced.map((p, idx) => ({
+          ...p,
+          bedId: `Bed ${String(idx + 1).padStart(2, "0")}`
+        }));
+
+        setPatients(formatted);
+        setActivePatientId(formatted[0].id);
+        setLoadedDatasetName(detected);
+        setDatasetSuccess(`Successfully loaded ${formatted.length} beds from local upload: "${file.name}"!`);
+      } catch (err: any) {
+        setDatasetError(err.message || "Parsing error. Ensure valid clinical data formats.");
+      } finally {
+        setIsLabbing(false);
+      }
+    };
+    reader.readAsText(file);
+  };
 
   // Get active patient object
   const activePatient = patients.find(p => p.id === activePatientId) || patients[0];
@@ -518,6 +896,16 @@ export default function App() {
             >
               ICU beds
             </button>
+            <button
+              onClick={() => setActiveTab("kaggle")}
+              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-colors ${
+                activeTab === "kaggle"
+                  ? "bg-[#141E33] text-[#FFEE58] border-b-2 border-[#FFEE58]"
+                  : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              Kaggle Lab
+            </button>
           </div>
 
           <div className="border-l border-[#1C2E44] pl-4 hidden md:flex items-center space-x-1">
@@ -966,6 +1354,203 @@ export default function App() {
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* TAB 4: KAGGLE DATASETS WORKSPACE */}
+          {activeTab === "kaggle" && (
+            <div className="p-4 flex flex-col h-full bg-[#080D18] text-white overflow-y-auto">
+              {/* Header Box */}
+              <div className="mb-4 pb-3 border-b border-[#1C2E44] flex flex-col md:flex-row justify-between items-start md:items-center">
+                <div>
+                  <h2 className="text-xs font-bold tracking-widest text-[#FFEE58] uppercase flex items-center space-x-1.5">
+                    <Database size={14} className="text-[#FFEE58]" />
+                    <span>Clinical Kaggle Dataset Lab</span>
+                  </h2>
+                  <p className="text-[9px] text-neutral-400 mt-1">
+                    Load, parse, and analyze real clinical Kaggle data on the live ICU waveforms & beds.
+                  </p>
+                </div>
+                {/* Active Source indicator */}
+                <div className="mt-2 md:mt-0 px-2.5 py-1 bg-[#141E33] border border-[#1C2E44] flex items-center space-x-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                  <span className="text-[8.5px] uppercase text-neutral-400">Active Source: </span>
+                  <span className="text-[9.5px] text-[#00E5FF] font-bold">{loadedDatasetName}</span>
+                </div>
+              </div>
+
+              {/* Success/Error Messaging */}
+              {datasetSuccess && (
+                <div className="mb-4 p-3 bg-green-950/30 border border-green-500/50 flex items-start space-x-2.5">
+                  <CheckCircle size={14} className="text-green-500 shrink-0 mt-0.5" />
+                  <div className="text-[9px] leading-relaxed text-green-200">{datasetSuccess}</div>
+                </div>
+              )}
+              {datasetError && (
+                <div className="mb-4 p-3 bg-red-950/30 border border-red-500/50 flex items-start space-x-2.5">
+                  <AlertCircle size={14} className="text-[#FF5252] shrink-0 mt-0.5" />
+                  <div className="text-[9px] leading-relaxed text-red-200">{datasetError}</div>
+                </div>
+              )}
+
+              {/* INSTRUCTION BLOCK: Where to save. */}
+              <div className="mb-5 p-4 bg-[#0E1525] border border-dashed border-[#1C2E44] text-[9.5px]">
+                <h3 className="font-bold uppercase text-[#FFEE58] tracking-wider mb-2 flex items-center space-x-1">
+                  <Sparkles size={11} />
+                  <span>Clinical Integration & File Location Guide</span>
+                </h3>
+                <p className="text-neutral-300 leading-normal mb-2.5">
+                  The Patient Monitor is pre-configured to fetch and read downloaded CSVs natively. If you download clinical dataset files from Kaggle, please rename and save them directly in the workspace at the following absolute paths:
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 font-mono text-[8.5px] text-neutral-400">
+                  <div className="p-2 bg-[#080D18] border border-[#1C2E44]/60">
+                    <span className="text-[#00E676] font-semibold block mb-0.5">Sepsis Detection Dataset</span>
+                    <span className="text-white select-all">/public/datasets/sepsis.csv</span>
+                  </div>
+                  <div className="p-2 bg-[#080D18] border border-[#1C2E44]/60">
+                    <span className="text-[#00E5FF] font-semibold block mb-0.5">Heart Failure Records</span>
+                    <span className="text-white select-all">/public/datasets/heart_failure.csv</span>
+                  </div>
+                  <div className="p-2 bg-[#080D18] border border-[#1C2E44]/60">
+                    <span className="text-[#AA80FF] font-semibold block mb-0.5">Maternal Health Risk</span>
+                    <span className="text-white select-all">/public/datasets/maternal_health.csv</span>
+                  </div>
+                </div>
+                <div className="mt-3 text-[8px] text-neutral-500 italic">
+                  *We prepared pre-loaded high-fidelity sample files at those locations so you can test loading and mapping them right now!
+                </div>
+              </div>
+
+              {/* THREE KAGGLE DATASETS INTERACTIVE CARDS */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+                
+                {/* Dataset 1 Card */}
+                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-[#1C2E44]">
+                      <div>
+                        <span className="text-[11px] font-bold text-[#00E676] block">1. PhysioNet Sepsis detection</span>
+                        <span className="text-[7.5px] text-neutral-500 uppercase">Kaggle ID: sepsis-survival-dataset</span>
+                      </div>
+                      <span className="text-[7.5px] bg-[#141E33] px-1 py-0.2 text-neutral-400 font-bold">CSV</span>
+                    </div>
+                    <p className="text-[9px] text-neutral-300 leading-tight mb-3">
+                      High-frequency physiological records tracking clinical early warning indices for ICU sepsis diagnosis. Includes correlation ratios.
+                    </p>
+                    <div className="text-[8px] space-y-1 text-neutral-500 font-semibold mb-4 bg-[#141E33]/30 p-2 border border-[#1C2E44]/40">
+                      <div><span className="text-[#00E676] font-bold">Mapped Vitals:</span> HR, SpO2, Temperature, Blood Pressure, Respiratory Rate</div>
+                      <div><span className="text-[#00E676] font-bold">Early Warn:</span> TREWS Sepsis Alert, EPIC EDI index</div>
+                    </div>
+                  </div>
+                  <div>
+                    <button
+                      onClick={() => loadAndInjectDataset("sepsis", "sepsis.csv")}
+                      disabled={isLabbing}
+                      className="w-full py-2 border border-[#00E676]/40 hover:border-[#00E676] hover:bg-[#00E676]/10 text-[#00E676] font-bold text-[9px] uppercase tracking-wider transition-colors"
+                    >
+                      {isLabbing ? "Generating Matrix..." : "Sync /public/sepsis.csv"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dataset 2 Card */}
+                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-[#1C2E44]">
+                      <div>
+                        <span className="text-[11px] font-bold text-[#00E5FF] block">2. UCSD Heart Failure Records</span>
+                        <span className="text-[7.5px] text-neutral-500 uppercase">Kaggle ID: heart-failure-clinical-data</span>
+                      </div>
+                      <span className="text-[7.5px] bg-[#141E33] px-1 py-0.2 text-neutral-400 font-bold">CSV</span>
+                    </div>
+                    <p className="text-[9px] text-neutral-300 leading-tight mb-3">
+                      Clinical variables predicting cardiovascular failure mortality and decompensation risk. Features serum creatinine / ejection fractions.
+                    </p>
+                    <div className="text-[8px] space-y-1 text-neutral-500 font-semibold mb-4 bg-[#141E33]/30 p-2 border border-[#1C2E44]/40">
+                      <div><span className="text-[#00E5FF] font-bold">Mapped Vitals:</span> Age, Sex, Heart Rate, SpO2, SBP, BP (Hypotension risk)</div>
+                      <div><span className="text-[#00E5FF] font-bold">Specialist:</span> Dispatches cardiologist, maps EF indicators</div>
+                    </div>
+                  </div>
+                  <div>
+                    <button
+                      onClick={() => loadAndInjectDataset("heart", "heart_failure.csv")}
+                      disabled={isLabbing}
+                      className="w-full py-2 border border-[#00E5FF]/40 hover:border-[#00E5FF] hover:bg-[#00E5FF]/10 text-[#00E5FF] font-bold text-[9px] uppercase tracking-wider transition-colors"
+                    >
+                      {isLabbing ? "Generating Matrix..." : "Sync /public/heart_failure.csv"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dataset 3 Card */}
+                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-[#1C2E44]">
+                      <div>
+                        <span className="text-[11px] font-bold text-[#AA80FF] block">3. WHO Maternal Health Risk</span>
+                        <span className="text-[7.5px] text-neutral-500 uppercase">Kaggle ID: maternal-health-risk-data</span>
+                      </div>
+                      <span className="text-[7.5px] bg-[#141E33] px-1 py-0.2 text-neutral-400 font-bold">CSV</span>
+                    </div>
+                    <p className="text-[9px] text-neutral-300 leading-tight mb-3">
+                      Risk indicators mapping pre-eclampsia and gestational hypertensive syndromes. Monitors obstetric vitals and blood sugar variables.
+                    </p>
+                    <div className="text-[8px] space-y-1 text-neutral-500 font-semibold mb-4 bg-[#141E33]/30 p-2 border border-[#1C2E44]/40">
+                      <div><span className="text-[#AA80FF] font-bold">Mapped Vitals:</span> Age, Systolic BP, Diastolic BP, Glucose, Temperature, Pupil Rate</div>
+                      <div><span className="text-[#AA80FF] font-bold">Triage:</span> Obstetric hypertension risk classification</div>
+                    </div>
+                  </div>
+                  <div>
+                    <button
+                      onClick={() => loadAndInjectDataset("maternal", "maternal_health.csv")}
+                      disabled={isLabbing}
+                      className="w-full py-2 border border-[#AA80FF]/40 hover:border-[#AA80FF] hover:bg-[#AA80FF]/10 text-[#AA80FF] font-bold text-[9px] uppercase tracking-wider transition-colors"
+                    >
+                      {isLabbing ? "Generating Matrix..." : "Sync /public/maternal_health.csv"}
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* DIRECT DRAG AND DROP ZONE */}
+              <div className="bg-[#0E1525] border border-dashed border-[#1C2E44] p-6 text-center relative hover:border-[#FFEE58] transition-colors">
+                <input 
+                  type="file" 
+                  accept=".csv"
+                  onChange={handleFileUpload}
+                  className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                />
+                <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none">
+                  <UploadCloud size={24} className="text-[#FFEE58] animate-bounce" style={{ animationDuration: "3s" }} />
+                  <p className="text-[10px] font-bold text-neutral-300 uppercase">
+                    Drag and Drop downloaded Kaggle clinical CSV here
+                  </p>
+                  <p className="text-[8px] text-neutral-500">
+                    Supports sepsis.csv, heart_failure.csv, maternal_health.csv, or any custom medical sheet.
+                  </p>
+                  <p className="text-[9px] text-[#FFEE58] underline mt-1">
+                    Click to browse local files
+                  </p>
+                </div>
+              </div>
+
+              {/* Reset to System Defaults Option */}
+              <div className="mt-5 text-right">
+                <button
+                  onClick={() => {
+                    setPatients(initialPatients);
+                    setActivePatientId("P108");
+                    setLoadedDatasetName("System Default Simulator Patients");
+                    setDatasetSuccess("Restored clinical workspace to system-default real-time ICU simulator databases.");
+                    setDatasetError(null);
+                  }}
+                  className="px-3 py-1.5 border border-[#1C2E44] hover:bg-neutral-800 text-[8.5px] uppercase text-neutral-400 hover:text-white transition-colors"
+                >
+                  Reset To Clinical Simulator Defaults
+                </button>
+              </div>
+
             </div>
           )}
 

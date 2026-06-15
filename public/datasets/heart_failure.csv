@@ -1,0 +1,7 @@
+PatientID,Name,Age,Gender,HR,O2Sat,Temp,SBP,DBP,Resp,EjectionFraction,DEATH_EVENT,Diagnosis
+H-201,Arthur Pendelton,68,M,108,92,36.4,95,58,24,25,1,Systolic Heart Failure (EF 25%)
+H-202,Sophia Lin,73,F,85,98,37.0,145,90,16,45,0,Decompensated Cardiac Watch
+H-203,Xavier Rodriguez,59,M,122,89,36.8,80,48,28,15,1,Cardiogenic Shock (EF 15%)
+H-204,Isabella Quant,82,F,76,96,36.2,115,70,14,35,0,Ischemic Cardiomyopathy
+H-205,George Sterling,61,M,112,94,36.9,85,50,22,20,1,Severe Cardiomyopathy (EF 20%)
+H-206,Clara Vance,77,F,90,97,36.6,130,85,18,30,0,Posterior STEMI Recovery

@@ -1,0 +1,7 @@
+PatientID,Name,Age,Gender,SystolicBP,DiastolicBP,BS,BodyTemp,HeartRate,RiskLevel,Diagnosis
+M-301,Maya Sharma,28,F,140,95,7.8,37.0,98,high risk,Pre-eclampsia Risk Monitor
+M-302,Nour Al-Sabah,32,F,120,80,5.4,36.8,82,low risk,Postpartum Recovery Normal
+M-303,Elena Gusev,22,F,135,88,6.9,37.5,92,mid risk,Gestational Hypertension Monitor
+M-304,Gabriella Vasquez,37,F,145,100,9.1,38.2,104,high risk,Gestational Diabetes & Fever
+M-305,Yuki Tanaka,25,F,138,92,7.2,36.9,90,mid risk,Elevated Antenatal Blood Sugar
+M-306,Zarah Williams,31,F,110,70,4.8,36.5,78,low risk,Routine Triage Assessment

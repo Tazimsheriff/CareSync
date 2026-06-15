@@ -1,0 +1,7 @@
+PatientID,Name,Age,Gender,HR,O2Sat,Temp,SBP,DBP,Resp,SepsisLabel,Diagnosis
+S-101,Amina Al-Bashir,58,F,118,91,38.9,88,58,26,1,Severe Sepsis Progression
+S-102,Liam Kennedy,67,M,95,96,37.2,112,74,20,0,Post-op Observation
+S-103,Chloe Jenkins,82,F,124,88,39.4,85,52,28,1,Septic Shock secondary to Pneumonia
+S-104,Ethan Thomas,71,M,82,95,36.5,120,80,18,0,Urological Ward Monitoring
+S-105,Amara Okafor,43,F,130,90,39.1,90,60,30,1,Bacteremia Response Watch
+S-106,Hans Mueller,79,M,105,92,38.4,98,62,24,1,Urosepsis Progression
