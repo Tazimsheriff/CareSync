@@ -1,0 +1,6 @@
+{
+  "name": "Patient Monitor UI",
+  "description": "A pixel-accurate ICU patient monitor UI combining features of Philips IntelliVue, Epic EDI, TREWS, and LookDeep Health.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
