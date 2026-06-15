@@ -1798,133 +1798,518 @@ export default function App() {
         <section id="waveform-column" className="flex-1 relative flex flex-col h-full border-r border-slate-200 bg-[#F8FAFC] overflow-y-auto">
           
           {/* TAB 1: LIVE OUTPATIANCE OSCILLOSCOPE */}
-          {activeTab === "live" && (
-            <div className="flex-1 grid grid-rows-4 h-full relative">
-              {/* Wave 1: ECG II */}
-              <div id="wave-row-ecg" className="relative border-b border-slate-200 flex flex-col justify-between p-2 pb-0">
-                <div className="flex justify-between items-start z-10 pointer-events-none">
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#059669]">ECG · LEAD II</span>
-                    <span className="text-[7.5px] text-slate-400 font-bold">X1.0 · FILTERED</span>
+          {/* TAB 1: LIVE OUTPATIANCE COCKPIT */}
+          {activeTab === "live" && (() => {
+            const activeMetrics = getPatientMetrics(activePatient);
+            const activeAIExplanation = getExplainableAIReason(activePatient);
+
+            return (
+              <div className="flex flex-col h-full bg-[#F8FAFC]">
+                
+                {/* Question 1: WHO IS CRITICAL? (Hospital Statistics top panel) */}
+                <div className="p-4 pb-2 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 shrink-0">
+                  <div className="bg-white border-l-4 border-[#DC2626] border border-slate-200 p-3 shadow-xs rounded-sm flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono">Critical priority</span>
+                      <h4 className="text-[22px] font-extrabold text-[#DC2626] font-mono leading-tight mt-0.5">
+                        {patients.filter(p => p.priority === "Critical").length} Patients
+                      </h4>
+                    </div>
+                    <div className="h-9 w-9 rounded-full bg-red-50 flex items-center justify-center text-[#DC2626]">
+                      <ShieldAlert size={18} className="animate-pulse" />
+                    </div>
                   </div>
-                  <div className="flex items-baseline space-x-1">
-                    <span className="text-sm font-bold text-[#059669]">{hr}</span>
-                    <span className="text-[8px] text-slate-400 font-bold">BPM</span>
+
+                  <div className="bg-white border-l-4 border-[#F97316] border border-slate-200 p-3 shadow-xs rounded-sm flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono">High Risk</span>
+                      <h4 className="text-[22px] font-extrabold text-[#F97316] font-mono leading-tight mt-0.5">
+                        {patients.filter(p => p.priority === "High Risk").length} Patients
+                      </h4>
+                    </div>
+                    <div className="h-9 w-9 rounded-full bg-amber-50 flex items-center justify-center text-[#F97316]">
+                      <AlertTriangle size={18} />
+                    </div>
+                  </div>
+
+                  <div className="bg-white border-l-4 border-[#22C55E] border border-slate-200 p-3 shadow-xs rounded-sm flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono">Stable / Under Watch</span>
+                      <h4 className="text-[22px] font-extrabold text-slate-800 font-mono leading-tight mt-0.5">
+                        {patients.filter(p => p.priority === "Stable" || p.priority === "Moderate").length} Patients
+                      </h4>
+                    </div>
+                    <div className="h-9 w-9 rounded-full bg-emerald-50 flex items-center justify-center text-[#22C55E]">
+                      <CheckCircle size={18} />
+                    </div>
                   </div>
                 </div>
-                <div className="flex-1 w-full relative">
-                  <canvas ref={ecgCanvasRef} className="absolute top-0 left-0 w-full h-full" />
+
+                {/* MAIN CONTENT SPLIT GRID */}
+                <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 p-4 pt-2 min-h-0">
+                  
+                  {/* Question 2: Which patient should I see first? (Left-side queue, 3/12 cols) */}
+                  <div className="xl:col-span-3 bg-white border border-slate-200 p-3 flex flex-col h-[520px] xl:h-full rounded-sm shadow-xs overflow-hidden">
+                    <div className="mb-2 shrink-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">PRIORITY QUEUE</span>
+                        <span className="text-[8px] font-extrabold bg-[#E6F4EA] text-[#059669] px-1.5 py-0.2 rounded-sm font-mono uppercase">REAL-TIME</span>
+                      </div>
+                      <div className="text-[11px] font-bold text-slate-800 mt-1">Which patient should I see first?</div>
+                      <p className="text-[9px] text-slate-400 leading-tight mt-0.5">Sorted strictly by predictive decompensation risk score.</p>
+                    </div>
+
+                    {/* List Container */}
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-1 pt-1">
+                      {[...patients]
+                        .sort((a, b) => b.riskScore - a.riskScore)
+                        .map((p) => {
+                          const isActivelyFocused = p.id === activePatientId;
+                          let dotColor = "bg-[#22C55E]";
+                          let riskColor = "text-[#22C55E]";
+                          let cardBorder = "border-slate-100";
+                          if (p.priority === "Critical") {
+                            dotColor = "bg-[#DC2626]";
+                            riskColor = "text-[#DC2626]";
+                            if (isActivelyFocused) cardBorder = "border-[#DC2626] ring-1 ring-[#DC2626]/20 bg-red-50/10";
+                          } else if (p.priority === "High Risk") {
+                            dotColor = "bg-[#F97316]";
+                            riskColor = "text-[#F97316]";
+                            if (isActivelyFocused) cardBorder = "border-[#F97316] ring-1 ring-[#F97316]/20 bg-amber-50/10";
+                          } else {
+                            if (isActivelyFocused) cardBorder = "border-[#2563EB] ring-1 ring-[#2563EB]/20 bg-blue-50/10";
+                          }
+
+                          return (
+                            <div
+                              key={p.id}
+                              onClick={() => {
+                                setActivePatientId(p.id);
+                                setDatasetSuccess(`Focussed on ${p.name} (${p.bedId}) clinical status.`);
+                              }}
+                              className={`p-2.5 bg-white border ${cardBorder} shadow-2xs hover:shadow-xs hover:border-slate-300 rounded-sm cursor-pointer transition-all flex flex-col justify-between`}
+                            >
+                              <div className="flex justify-between items-start font-mono">
+                                <div className="flex items-center space-x-1.5">
+                                  <span className={`h-2 w-2 rounded-full ${dotColor}`}></span>
+                                  <span className="text-[11px] font-extrabold text-slate-800 line-clamp-1">{p.name}</span>
+                                </div>
+                                <span className="text-[10px] font-bold text-red-650 uppercase font-mono">{p.bedId}</span>
+                              </div>
+                              <div className="flex justify-between items-center mt-2 text-[9.5px] font-mono">
+                                <div>
+                                  <span className="text-slate-400">Risk score: </span>
+                                  <span className={`font-extrabold ${riskColor}`}>{p.riskScore}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400">SpO₂: </span>
+                                  <span className={`font-extrabold ${p.spo2 < 93 ? "text-red-700" : "text-[#0284C7]"}`}>{p.spo2}%</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+
+                  {/* Question 3: Why is patient critical? (Center detail view, 6/12 cols) */}
+                  <div className="xl:col-span-6 bg-white border border-slate-200 p-4 rounded-sm shadow-xs flex flex-col overflow-y-auto">
+                    <div className="border-b border-slate-100 pb-3 mb-3 shrink-0">
+                      <div className="flex flex-wrap justify-between items-center gap-2 font-mono">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[11px] bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 font-extrabold font-mono rounded-sm">
+                            {activePatient.bedId.toUpperCase()}
+                          </span>
+                          <h3 className="text-sm font-extrabold text-slate-900">{activePatient.name}</h3>
+                        </div>
+                        <span className="text-[9.5px] font-bold text-slate-400">PATIENT ID: {activePatient.id}</span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2.5 text-[10px] text-slate-500 font-bold mt-2 font-mono">
+                        <span>Age: {activePatient.age}y</span>
+                        <span>&bull;</span>
+                        <span>Sex: {activePatient.gender}</span>
+                        <span>&bull;</span>
+                        <span>Diagnosis: <b className="text-red-600 uppercase">{activePatient.dx}</b></span>
+                      </div>
+                    </div>
+
+                    {/* Vitals Box - Extremely Tidy Big Clinical Numbers */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 font-mono">
+                      
+                      {/* HR */}
+                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
+                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
+                          <span>Heart rate</span>
+                          <span className="text-[#059669]">50-120</span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-1">
+                          <span className="text-2xl font-extrabold text-[#059669]">{activePatient.hr}</span>
+                          <span className="text-[8.5px] text-slate-400">BPM</span>
+                        </div>
+                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                          {activePatient.hr > 120 ? (
+                            <span className="text-red-600 font-extrabold">↑ Increasing</span>
+                          ) : activePatient.hr < 60 ? (
+                            <span className="text-red-500 font-extrabold">↓ Falling</span>
+                          ) : (
+                            <span className="text-[#059669] font-bold">● Stable watch</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* SpO2 */}
+                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
+                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
+                          <span>SpO₂ sat</span>
+                          <span className="text-[#0284C7]">90-100</span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-1">
+                          <span className="text-2xl font-extrabold text-[#0284C7]">{activePatient.spo2}</span>
+                          <span className="text-[8.5px] text-slate-400">%</span>
+                        </div>
+                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                          {activePatient.spo2 < 93 ? (
+                            <span className="text-red-600 font-extrabold">↓ Falling</span>
+                          ) : (
+                            <span className="text-[#0284C7] font-bold">● Stable watch</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Blood Pressure */}
+                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
+                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
+                          <span>Blood pressure</span>
+                          <span className="text-red-650 text-[7.5px]">90/50 - 140/90</span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-1">
+                          <span className="text-xl font-extrabold text-red-600 tracking-tight">{activePatient.bpSys}/{activePatient.bpDia}</span>
+                          <span className="text-[8px] text-slate-400">mmHg</span>
+                        </div>
+                        <div className="text-[8.5px] font-bold text-slate-400 mt-1 uppercase">
+                          {activePatient.bpSys < 90 ? (
+                            <span className="text-red-650 font-extrabold">↓ Hypotension</span>
+                          ) : (
+                            <span className="text-slate-400">● Stable watch</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Temperature */}
+                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
+                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
+                          <span>Temp</span>
+                          <span className="text-amber-600">36.0 - 38.5</span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-1">
+                          <span className="text-2xl font-extrabold text-amber-600">{activePatient.temp.toFixed(1)}</span>
+                          <span className="text-[9.5px] text-slate-500">°C</span>
+                        </div>
+                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                          {activePatient.temp > 38.0 ? (
+                            <span className="text-amber-700 font-extrabold">↑ High Fever</span>
+                          ) : (
+                            <span className="text-[#059669] font-bold">● Stable watch</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Respiratory rate */}
+                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
+                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
+                          <span>Resp Rate</span>
+                          <span className="text-[#7C3AED]">8-25</span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-1">
+                          <span className="text-2xl font-extrabold text-[#7C3AED]">{activePatient.rr}</span>
+                          <span className="text-[8.5px] text-slate-400">/min</span>
+                        </div>
+                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                          {activePatient.rr > 22 ? (
+                            <span className="text-[#7C3AED] font-extrabold">↑ Tachypnea</span>
+                          ) : (
+                            <span className="text-[#7C3AED] font-bold">● Stable watch</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Risk predict */}
+                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
+                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
+                          <span>EDI Risk score</span>
+                          <span className="text-slate-400">MIN 0 MAX 100</span>
+                        </div>
+                        <div className="flex items-baseline justify-between mt-1">
+                          <span className="text-2xl font-extrabold" style={{ color: activePatient.riskScore > 65 ? "#DC2626" : "#22C55E" }}>
+                            {activePatient.riskScore}%
+                          </span>
+                        </div>
+                        <div className="text-[8px] font-bold mt-1 uppercase">
+                          {activePatient.riskScore > 75 ? (
+                            <span className="text-red-600 font-extrabold">Critical</span>
+                          ) : activePatient.riskScore > 40 ? (
+                            <span className="text-amber-600 font-bold">High Risk</span>
+                          ) : (
+                            <span className="text-[#22C55E] font-extrabold">Stable</span>
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+
+                    {/* Explainable AI block (Answering WHY is the patient critical?) */}
+                    <div className="bg-slate-50 border border-slate-200 p-3.5 mb-4 rounded-sm">
+                      <div className="flex items-center space-x-1.5 text-[10px] font-extrabold text-[#2563EB] uppercase tracking-wider font-mono">
+                        <Sparkles size={12} />
+                        <span>CareSync Explainable AI Clinical Guard</span>
+                      </div>
+                      
+                      <p className="text-[10px] text-slate-700 leading-normal mt-1.5 font-sans">
+                        Patient <strong className="text-slate-900 font-bold">{activePatient.name}</strong> has a computed Early Deterioration Index of <strong className="text-red-600 font-extrabold">{activePatient.riskScore}%</strong> because:
+                      </p>
+
+                      <ul className="space-y-1 mt-2 pl-3 text-[10px] text-slate-600 list-disc font-sans leading-relaxed">
+                        {activeAIExplanation.length > 0 ? (
+                          activeAIExplanation.map((reason, ri) => (
+                            <li key={ri} className="text-slate-700">
+                              <strong>{reason.split(" ")[0]}</strong> {reason.split(" ").slice(1).join(" ")}
+                            </li>
+                          ))
+                        ) : (
+                          <li className="text-emerald-700 font-semibold list-none pl-0">
+                            ✓ All active vitals metrics reside perfectly inside their non-alarm normal ward bounds.
+                          </li>
+                        )}
+                        
+                        {activeMetrics.spo2Deteriorating && (
+                          <li className="text-[#D97706] font-bold">
+                            ⚠ TREND ALERT: SpO₂ history sequence exhibits continuous hypoxic slope deterioration: {activePatient.spo2History.join("% → ")}%. Predictive algorithms trigger immediate warning alert.
+                          </li>
+                        )}
+                      </ul>
+
+                      <div className="text-[9.5px] text-slate-400 font-mono mt-3 border-t border-slate-100 pt-2 flex items-center justify-between">
+                        <span>Routing recommendation:</span>
+                        <span className="text-indigo-650 font-bold uppercase">{activeMetrics.specialist}</span>
+                      </div>
+                    </div>
+
+                    {/* Beautiful Clinical Timeline (Doctors love this!) */}
+                    <div className="bg-white border border-slate-200 p-3.5 mb-4 rounded-sm">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-2">
+                         Clinical Trend Timeline
+                      </div>
+                      <div className="relative pl-4 border-l-2 border-slate-200 ml-1 space-y-3 pb-1 text-[10px] font-sans">
+                        
+                        {/* Timeline Node 1 */}
+                        <div className="relative">
+                          <span className="absolute -left-[21px] top-0.5 h-2 w-2 rounded-full border border-slate-300 bg-slate-350"></span>
+                          <div className="flex justify-between items-baseline">
+                            <span className="font-bold text-slate-800">12:00</span>
+                            <span className="text-[9px] text-slate-400 font-medium">Baseline Watch</span>
+                          </div>
+                          <p className="text-[9.5px] text-slate-500 mt-0.5 leading-tight">Patient was stable. Autonomic homeostasis maintained. SpO₂ ~ {Math.min(100, activePatient.spo2 + 6)}%, HR ~ {activePatient.hr - 15} bpm.</p>
+                        </div>
+
+                        {/* Timeline Node 2 */}
+                        <div className="relative">
+                          <span className="absolute -left-[21px] top-0.5 h-2 w-2 rounded-full border border-amber-300 bg-amber-400"></span>
+                          <div className="flex justify-between items-baseline">
+                            <span className="font-bold text-[#E65100]">12:10</span>
+                            <span className="text-[9px] text-amber-600 font-bold font-mono">Deterioration Slope</span>
+                          </div>
+                          <p className="text-[9.5px] text-slate-500 mt-0.5 leading-tight">SpO₂ level sequence recognized as continuous downward trend. Heart Rate slightly elevated to {activePatient.hr - 8} bpm.</p>
+                        </div>
+
+                        {/* Timeline Node 3 */}
+                        <div className="relative">
+                          <span className="absolute -left-[21px] top-0.5 h-2 w-2 rounded-full border border-red-300 bg-red-500 animate-pulse"></span>
+                          <div className="flex justify-between items-baseline">
+                            <span className="font-bold text-[#DC2626]">12:25</span>
+                            <span className="text-[9px] text-red-600 font-bold font-mono uppercase">Telemetry Alarm Triggered</span>
+                          </div>
+                          <p className="text-[9.5px] text-slate-650 mt-0.5 leading-tight font-semibold">
+                            Current active patient vitals recorded: SpO₂ value at {activePatient.spo2}%, heart rate {activePatient.hr} bpm, blood pressure {activePatient.bpSys}/{activePatient.bpDia} mmHg.
+                          </p>
+                        </div>
+                        
+                      </div>
+                    </div>
+
+                    {/* Clinician One-Click Actions */}
+                    <div className="mt-auto shrink-0 pt-3 border-t border-slate-100 font-mono">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Bedside Emergency Actions</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[9px] font-bold">
+                        <button
+                          onClick={() => {
+                            setDatasetSuccess(`✅ CENTRAL COMMAND ALERT: ICU coordinator notified immediately for ${activePatient.name} in ${activePatient.bedId}. Dispatching coordinator...`);
+                          }}
+                          className="py-2 px-1 text-center bg-[#DC2626] text-white hover:bg-red-750 tracking-tight transition-colors uppercase rounded-sm cursor-pointer shadow-2xs text-[8.5px]"
+                        >
+                          Notify ICU
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDatasetSuccess(`✅ CLINICIAN ASSIGNED: Dr. John Doe (lowest workload, available) assigned to supervise ${activePatient.name} bedside monitor.`);
+                          }}
+                          className="py-2 px-1 text-center bg-[#2563EB] text-white hover:bg-blue-700 tracking-tight transition-colors uppercase rounded-sm cursor-pointer shadow-2xs text-[8.5px]"
+                        >
+                          Assign Doctor
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDatasetSuccess(`✅ DISPATCH SUCCESS: Specialist Team [${activeMetrics.specialist.toUpperCase()}] dispatched to ${activePatient.bedId} with life-support tools.`);
+                          }}
+                          className="py-2 px-1 text-center bg-indigo-600 text-white hover:bg-indigo-700 tracking-tight transition-colors uppercase rounded-sm cursor-pointer shadow-2xs text-[8.5px]"
+                        >
+                          Call Team
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPatientId(activePatient.id);
+                          }}
+                          className="py-2 px-1 text-center bg-slate-50 text-slate-700 hover:bg-slate-200 hover:text-slate-900 border border-slate-300 transition-colors uppercase rounded-sm cursor-pointer text-[8.5px]"
+                        >
+                          Details Panel
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Operations column (Right, 3/12 cols) */}
+                  <div className="xl:col-span-3 flex flex-col gap-4 text-slate-800 h-full">
+                    
+                    {/* ICU Command Center Matrix Grid */}
+                    <div className="bg-white border border-slate-200 p-3 rounded-sm shadow-xs flex flex-col">
+                      <div className="mb-2 pb-1.5 border-b border-slate-100 flex justify-between items-center shrink-0">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">ICU BEDS GRID</span>
+                        <span className="text-[8px] font-bold bg-indigo-50 text-indigo-700 px-1.5 rounded-sm uppercase tracking-wide font-mono">20 BEDS</span>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-1.5 flex-1 select-none font-mono">
+                        {patients.map((p) => {
+                          const isFocusedOnMain = p.id === activePatientId;
+                          let bgLed = "bg-[#22C55E]";
+                          let bgCell = "bg-white border-slate-200 hover:border-slate-300";
+                          
+                          if (p.priority === "Critical") {
+                            bgLed = "bg-[#DC2626]";
+                            bgCell = isFocusedOnMain ? "bg-red-50 border-[#DC2626] ring-1 ring-[#DC2626]/20" : "bg-white border-slate-200 hover:border-[#DC2626]";
+                          } else if (p.priority === "High Risk") {
+                            bgLed = "bg-[#F97316]";
+                            bgCell = isFocusedOnMain ? "bg-amber-50 border-[#F97316] ring-1 ring-[#F97316]/20" : "bg-white border-slate-200 hover:border-[#F97316]";
+                          } else {
+                            bgCell = isFocusedOnMain ? "bg-blue-50 border-[#2563EB] ring-1 ring-[#2563EB]/20" : "bg-white border-slate-200 hover:border-[#2563EB]";
+                          }
+
+                          const bedNumOnly = p.bedId.replace("Bed ", "");
+
+                          return (
+                            <div
+                              key={p.id}
+                              title={`${p.name} - ${p.priority} priority`}
+                              onClick={() => {
+                                setActivePatientId(p.id);
+                                setDatasetSuccess(`Selected ${p.name} (${p.bedId}) from central beds matrix.`);
+                              }}
+                              className={`p-1.5 flex flex-col justify-between items-center text-center h-[42px] border rounded-sm cursor-pointer transition-all ${bgCell}`}
+                            >
+                              <span className="text-[10px] font-extrabold text-slate-800">{bedNumOnly}</span>
+                              <span className={`h-1.5 w-1.5 rounded-full ${bgLed} ${p.priority === "Critical" ? "animate-pulse" : ""}`}></span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Doctor Workload / Availability Matrix */}
+                    <div className="bg-white border border-slate-200 p-3.5 rounded-sm shadow-xs flex-1 flex flex-col">
+                      <div className="mb-2 pb-1 border-b border-slate-100 flex justify-between items-baseline shrink-0">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">STAFF MATRIX</span>
+                        <span className="text-[8px] font-bold text-slate-400 uppercase font-mono">ON-DUTY</span>
+                      </div>
+
+                      <div className="space-y-2 mt-1">
+                        
+                        {/* Doctor 1 */}
+                        <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-sm font-mono text-[9.5px]">
+                          <div>
+                            <div className="font-extrabold text-slate-800">Dr. John Doe</div>
+                            <span className="text-[8px] text-slate-400 uppercase">Emergency Med</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="px-1.5 py-0.1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold rounded-sm uppercase text-[7px]">
+                              Available
+                            </span>
+                            <div className="text-[8px] text-slate-500 font-bold mt-0.5">2 Patients</div>
+                          </div>
+                        </div>
+
+                        {/* Doctor 2 */}
+                        <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-sm font-mono text-[9.5px]">
+                          <div>
+                            <div className="font-extrabold text-slate-800">Dr. Emma Brooks</div>
+                            <span className="text-[8px] text-slate-400 uppercase">Pulmonology Specialist</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="px-1.5 py-0.1 bg-amber-50 text-amber-700 border border-amber-200 font-bold rounded-sm uppercase text-[7px]">
+                              Busy
+                            </span>
+                            <div className="text-[8px] text-slate-500 font-bold mt-0.5">8 Patients</div>
+                          </div>
+                        </div>
+
+                        {/* Doctor 3 */}
+                        <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-sm font-mono text-[9.5px]">
+                          <div>
+                            <div className="font-extrabold text-slate-800">Dr. James Smith</div>
+                            <span className="text-[8px] text-slate-400 uppercase">Cardiology Specialist</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="px-1.5 py-0.1 bg-amber-50 text-amber-700 border border-amber-200 font-bold rounded-sm uppercase text-[7px]">
+                              Busy
+                            </span>
+                            <div className="text-[8px] text-slate-500 font-bold mt-0.5">5 Patients</div>
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* AI Suggested Doctor recommendation */}
+                      <div className="mt-auto pt-3 border-t border-slate-100">
+                        <div className="p-2.5 bg-[#EFF6FF] border border-[#BFDBFE] rounded-sm text-[9.5px]">
+                          <div className="flex items-center space-x-1 font-bold text-[#1E40AF] font-mono text-[8px] uppercase tracking-wide">
+                            <Sparkles size={11} className="text-[#2563EB]" />
+                            <span>AI Dispatch recommendation</span>
+                          </div>
+                          <div className="text-slate-850 text-[10px] font-bold mt-1.5">
+                            Suggested on-duty: <strong className="text-[#1E40AF]">Dr. John Doe</strong>
+                          </div>
+                          <p className="text-[9px] text-[#1D4ED8] mt-0.5 leading-normal font-sans">
+                            Lowest caseload (2 patients). ETA: <strong>2 mins</strong>.
+                          </p>
+                          
+                          <button
+                            onClick={() => {
+                              setDatasetSuccess(`✅ DISPATCH SUCCESS: Bedward pager alert dispatched to Dr. John Doe. Estimated arrival at ${activePatient.bedId}: 120s.`);
+                            }}
+                            className="mt-2 w-full py-1 bg-[#2563EB] text-white font-bold uppercase hover:bg-blue-750 text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono"
+                          >
+                            Assign Pager & Call
+                          </button>
+                        </div>
+                      </div>
+
+                    </div>
+
+                  </div>
+
                 </div>
               </div>
-
-              {/* Wave 2: SpO2 */}
-              <div id="wave-row-spo2" className="relative border-b border-slate-200 flex flex-col justify-between p-2 pb-0">
-                <div className="flex justify-between items-start z-10 pointer-events-none">
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#0284C7]">SPO2 · PLETH</span>
-                    <span className="text-[7.5px] text-slate-400 font-bold">PLETH WAVEFORM</span>
-                  </div>
-                  <div className="flex items-baseline space-x-1">
-                    <span className="text-sm font-bold text-[#0284C7]">{spo2}%</span>
-                  </div>
-                </div>
-                <div className="flex-1 w-full relative">
-                  <canvas ref={spo2CanvasRef} className="absolute top-0 left-0 w-full h-full" />
-                </div>
-              </div>
-
-              {/* Wave 3: Resp */}
-              <div id="wave-row-resp" className="relative border-b border-slate-200 flex flex-col justify-between p-2 pb-0">
-                <div className="flex justify-between items-start z-10 pointer-events-none">
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#7C3AED]">RESP · THORACIC</span>
-                    <span className="text-[7.5px] text-slate-400 font-bold">IMPEDANCE SENSOR</span>
-                  </div>
-                  <div className="flex items-baseline space-x-1">
-                    <span className="text-sm font-bold text-[#7C3AED]">{rr}</span>
-                    <span className="text-[8px] text-slate-400 font-bold">/MIN</span>
-                  </div>
-                </div>
-                <div className="flex-1 w-full relative">
-                  <canvas ref={respCanvasRef} className="absolute top-0 left-0 w-full h-full" />
-                </div>
-              </div>
-
-              {/* Wave 4: CO2 */}
-              <div id="wave-row-co2" className="relative flex flex-col justify-between p-2 pb-0">
-                <div className="flex justify-between items-start z-10 pointer-events-none">
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#EA580C]">CO2 · CAPNOGRAPH</span>
-                    <span className="text-[7.5px] text-slate-400 font-bold">SIDESTREAM INFRARED</span>
-                  </div>
-                  <div className="flex items-baseline space-x-1">
-                    <span className="text-xs font-bold text-[#EA580C]">{co2}</span>
-                    <span className="text-[8px] text-slate-400 font-bold">mmHg</span>
-                  </div>
-                </div>
-                <div className="flex-1 w-full relative">
-                  <canvas ref={co2CanvasRef} className="absolute top-0 left-0 w-full h-full" />
-                </div>
-              </div>
-
-              {/* Floating EPIC EDI Gauge */}
-              <div id="floating-edi-panel" style={{ contentVisibility: "auto" }} className="absolute top-2 right-2 sm:top-3 sm:right-3 w-[110px] sm:w-[140px] bg-white/94 backdrop-blur-sm border border-slate-200 p-1.5 sm:p-2.5 z-20 flex flex-col select-none text-slate-800 shadow-md rounded-sm">
-                <div className="text-[7.5px] sm:text-[8px] font-bold tracking-wider text-slate-400 uppercase flex items-center justify-between font-mono">
-                  <span>EDI · EPIC</span>
-                  <span className="scale-75 text-[#DC2626] font-extrabold animate-pulse">LIVE</span>
-                </div>
-
-                {/* Donut */}
-                <div className="relative w-[60px] h-[60px] sm:w-[90px] sm:h-[90px] mx-auto mt-1 sm:mt-1.5 flex items-center justify-center">
-                  <svg className="w-full h-full -rotate-90" viewBox="0 0 90 90">
-                    <circle cx="45" cy="45" r={ediR} stroke="#F1F5F9" strokeWidth="4.5" fill="transparent" />
-                    <circle
-                      cx="45"
-                      cy="45"
-                      r={ediR}
-                      stroke={ediColor}
-                      strokeWidth="5"
-                      strokeDasharray={ediCircum}
-                      strokeDashoffset={ediOffset}
-                      fill="transparent"
-                      strokeLinecap="square"
-                      className="transition-all duration-1000 ease-in-out"
-                    />
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-[20px] font-bold font-mono" style={{ color: ediColor }}>
-                      {ediScore}
-                    </span>
-                    <span className="text-[6.5px] text-slate-400 font-bold tracking-wide font-mono">INDEX</span>
-                  </div>
-                </div>
-
-                <div className="text-center text-[7.5px] font-bold tracking-wide mt-1 font-mono" style={{ color: ediColor }}>
-                  {ediRiskText}
-                </div>
-
-                <div className="h-[2.5px] w-full bg-slate-100 mt-1.5 overflow-hidden rounded-full">
-                  <div className="h-full transition-all duration-1000 ease-in-out" style={{ width: `${ediScore}%`, backgroundColor: ediColor }}></div>
-                </div>
-
-                {/* Flaq pills */}
-                <div className="flex flex-col space-y-1 mt-2 text-[7px] font-bold font-mono">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">MAP CRITICAL</span>
-                    <span className="px-1 py-0.2 bg-red-50 text-red-600 border border-red-200 rounded-sm">RED</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">HR EXTRA-HIGH</span>
-                    <span className="px-1 py-0.2 bg-red-50 text-red-600 border border-red-200 rounded-sm">RED</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">RESP ELEVATED</span>
-                    <span className="px-1 py-0.2 bg-amber-50 text-amber-700 border border-amber-200 rounded-sm">AMBER</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* TAB 2: MULTIPLE PATIENTS BOARD TABLE */}
           {activeTab === "table" && (
@@ -4353,79 +4738,89 @@ export default function App() {
         const metrics = getPatientMetrics(selectedPatient);
         const explReasons = getExplainableAIReason(selectedPatient);
         
-        let priorityColor = "#00E676";
-        let cardBorder = "border-green-900/60";
-        let headingBg = "bg-green-950/20";
+        let priorityColor = "#22C55E";
+        let cardBorder = "border-[#22C55E]/30";
+        let headingBg = "bg-[#22C55E]/10";
+        let badgeStyle = "bg-green-50 text-green-700 border-green-200";
         if (selectedPatient.priority === "Critical") {
-          priorityColor = "#FF5252";
-          cardBorder = "border-red-900/60";
-          headingBg = "bg-red-950/20";
+          priorityColor = "#DC2626";
+          cardBorder = "border-[#DC2626]/30";
+          headingBg = "bg-[#DC2626]/10";
+          badgeStyle = "bg-red-50 text-red-700 border-red-250";
         } else if (selectedPatient.priority === "High Risk") {
-          priorityColor = "#FF9100";
-          cardBorder = "border-amber-900/60";
-          headingBg = "bg-amber-950/20";
+          priorityColor = "#F97316";
+          cardBorder = "border-[#F97316]/30";
+          headingBg = "bg-[#F97316]/10";
+          badgeStyle = "bg-amber-50 text-amber-700 border-amber-250";
         } else if (selectedPatient.priority === "Moderate") {
-          priorityColor = "#FFEE58";
-          cardBorder = "border-yellow-900/30";
-          headingBg = "bg-yellow-950/10";
+          priorityColor = "#D97706";
+          cardBorder = "border-[#D97706]/30";
+          headingBg = "bg-[#D97706]/10";
+          badgeStyle = "bg-amber-55 text-amber-700 border-amber-205";
         }
 
         return (
-          <div className="absolute inset-0 z-50 bg-black/75 flex justify-end transition-opacity duration-300 select-text">
+          <div className="absolute inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex justify-end transition-opacity duration-300 select-text">
             {/* Main drawer body */}
-            <div className="w-full max-w-[480px] h-full bg-[#141E33] border-l border-[#1C2E44] flex flex-col justify-between shadow-2xl relative">
+            <div className="w-full max-w-[480px] h-full bg-white border-l border-slate-200 flex flex-col justify-between shadow-2xl relative text-slate-800">
               
               {/* Header block with close */}
-              <div className="p-4 border-b border-[#1C2E44] flex items-center justify-between">
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center space-x-2">
                   <ShieldAlert size={16} style={{ color: priorityColor }} className="animate-pulse" />
                   <div>
-                    <h3 className="font-bold text-xs uppercase tracking-wider text-neutral-300">EPIC CLINICAL CONSOLE</h3>
-                    <p className="text-[11px] font-bold text-red-500">{selectedPatient.bedId.toUpperCase()} &bull; {selectedPatient.id}</p>
+                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-500 font-mono">CLINICAL PROFILE DRAWER</h3>
+                    <p className="text-[11px] font-bold text-slate-800 leading-none mt-0.5">{selectedPatient.bedId.toUpperCase()} &bull; Patient ID: {selectedPatient.id}</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setSelectedPatientId(null)}
-                  className="p-1 px-1.5 border border-[#1C2E44] bg-[#0E1525] text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                  className="p-1.5 border border-slate-200 bg-white text-slate-400 hover:text-slate-800 transition-colors cursor-pointer rounded-sm hover:border-slate-300"
                 >
                   <X size={14} />
                 </button>
               </div>
 
               {/* Drawer Content */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 font-sans bg-[#F8FAFC]">
                 
                 {/* 1. Patient profile card */}
-                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 text-[10px] space-y-1">
-                  <div className="flex justify-between items-baseline mb-1">
-                    <span className="text-[12px] font-bold text-[#00E5FF]">{selectedPatient.name}</span>
-                    <span className="text-[8px] bg-[#141E33] px-2 py-0.5 border border-[#1C2E44] text-neutral-400 uppercase font-semibold">
+                <div className="bg-white border border-slate-200 p-3 text-[10px] space-y-2 rounded-sm shadow-2xs">
+                  <div className="flex justify-between items-baseline border-b border-slate-100 pb-1.5 mb-1">
+                    <span className="text-[14px] font-extrabold text-slate-900 tracking-tight">{selectedPatient.name}</span>
+                    <span className="text-[8px] bg-slate-50 px-2 py-0.5 border border-slate-200 text-slate-500 font-bold uppercase rounded-sm">
                       {selectedPatient.gender} &bull; {selectedPatient.age} Yrs
                     </span>
                   </div>
-                  <div><span className="text-neutral-500">Diagnosis: </span><span className="text-red-400 font-semibold uppercase">{selectedPatient.dx}</span></div>
-                  <div><span className="text-neutral-500">Status Alert: </span><span className="text-neutral-300">{selectedPatient.alertStatus}</span></div>
-                  <div className="pt-2 flex items-center justify-between border-t border-[#1C2E44]/50 mt-1.5">
-                    <span className="text-neutral-500 uppercase text-[8.5px]">Alarm Priority:</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-bold border" style={{ borderColor: priorityColor, color: priorityColor, backgroundColor: headingBg }}>
-                      {selectedPatient.priority.toUpperCase()}
+                  <div className="flex justify-between text-[10px] text-slate-600 font-medium">
+                    <span>Diagnosis:</span>
+                    <span className="text-red-650 font-bold uppercase">{selectedPatient.dx}</span>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-slate-600 font-medium">
+                    <span>Alert Condition:</span>
+                    <span className="text-slate-800 font-bold">{selectedPatient.alertStatus}</span>
+                  </div>
+                  <div className="pt-2 flex items-center justify-between border-t border-slate-100 mt-1.5">
+                    <span className="text-slate-400 uppercase text-[8px] font-bold font-mono">Priority Classification:</span>
+                    <span className={`px-2 py-0.5 text-[9px] font-extrabold border uppercase rounded-sm ${badgeStyle}`}>
+                      {selectedPatient.priority}
                     </span>
                   </div>
                 </div>
 
                 {/* 2. Deterioration Warning (Trend Detection) */}
                 {metrics.spo2Deteriorating && (
-                  <div className="bg-[#5c4008]/40 border border-[#FFD740] p-3 space-y-1">
-                    <div className="flex items-center space-x-1.5 text-[#FFD740] font-bold text-[9.5px]">
+                  <div className="bg-amber-50 border border-amber-200 p-3 space-y-2 text-slate-800 rounded-sm">
+                    <div className="flex items-center space-x-1.5 text-amber-700 font-bold text-[9.5px] font-mono">
                       <AlertTriangle size={13} className="animate-pulse" />
-                      <span>⚠ EARLY DETERIORATION WARNING</span>
+                      <span>⚠ AUTOMATED DECOMPENSATION WARNING</span>
                     </div>
-                    <p className="text-[9px] text-neutral-200 leading-relaxed">
-                      "Oxygen saturation is decreasing continuously. Patient may become critical within next 30 minutes."
+                    <p className="text-[9.5px] text-slate-700 leading-normal">
+                      Oxygen saturation displays sequence deterioration on wrist monitor feed. Early intervention protocols active.
                     </p>
-                    <div className="pt-1.5 flex items-center justify-between text-[8px] text-neutral-400 uppercase">
-                      <span>SpO₂ trend sequence:</span>
-                      <span className="font-bold underline text-[#00E5FF]">
+                    <div className="pt-1.5 border-t border-amber-200/60 flex items-center justify-between text-[8px] text-slate-500 font-bold font-mono uppercase">
+                      <span>Oxygen trend sequence:</span>
+                      <span className="font-extrabold text-red-600">
                         {selectedPatient.spo2History.join(" → ")}%
                       </span>
                     </div>
@@ -4433,53 +4828,53 @@ export default function App() {
                 )}
 
                 {/* 3. Explainable AI Clinical Triggers */}
-                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 space-y-1.5">
-                  <div className="flex items-center justify-between border-b border-[#1C2E44] pb-1.5 mb-1 bg-[#141E33]/30 px-1">
-                    <span className="text-[9px] font-bold text-[#FFEE58] uppercase flex items-center space-x-1">
-                      <Sparkles size={11} className="mr-0.5 text-[#FFEE58]" />
-                      <span>Explainable AI Diagnosis</span>
+                <div className="bg-white border border-slate-200 p-3.5 space-y-2 rounded-sm shadow-2xs">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 mb-1">
+                    <span className="text-[9px] font-extrabold text-indigo-750 uppercase flex items-center space-x-1 font-mono">
+                      <Sparkles size={11} className="mr-0.5 text-indigo-650" />
+                      <span>Explainable AI Core Triggers</span>
                     </span>
-                    <span className="text-[7.5px] text-neutral-500 font-semibold uppercase">DYNAMIC CLARIFIER</span>
+                    <span className="text-[7.5px] text-slate-400 font-bold uppercase font-mono">Telemetry Check</span>
                   </div>
-                  <p className="text-[9px] text-neutral-300 leading-normal">
-                    Patient <b className="text-white">{selectedPatient.name}</b> is targeted as <b style={{ color: priorityColor }}>{selectedPatient.priority}</b> because:
+                  <p className="text-[9.5px] text-slate-650 leading-normal">
+                    Assigned Index score of <strong className="text-slate-900">{selectedPatient.riskScore}%</strong> is derived mathematically according to clinical indicators:
                   </p>
-                  <ul className="space-y-1 text-[9px] pl-1 pt-1">
+                  <ul className="space-y-1 text-[9.5px] pl-1 font-sans font-medium text-slate-700">
                     {explReasons.length > 0 ? (
                       explReasons.map((reason, ri) => (
-                        <li key={ri} className="flex items-start text-neutral-200">
-                          <span className="text-red-500 mr-1.5">&bull;</span>
+                        <li key={ri} className="flex items-start text-slate-700">
+                          <span className="text-red-500 mr-2 font-bold">&bull;</span>
                           <span>{reason}</span>
                         </li>
                       ))
                     ) : (
-                      <li className="flex items-start text-green-400">
-                        <span className="mr-1.5">&bull;</span>
-                        <span>All core vitals remain within healthy clinical thresholds.</span>
+                      <li className="flex items-start text-green-700 font-semibold">
+                        <span className="mr-2 font-bold text-[#22C55E]">&bull;</span>
+                        <span>Vitals metrics reside entirely inside standard homeostatic boundaries.</span>
                       </li>
                     )}
                   </ul>
-                  <div className="pt-1.5 text-[8.5px] font-bold text-[#FF5252] border-t border-[#1C2E44]/40 mt-1.5 uppercase">
-                    Immediate medical attention recommended.
+                  <div className="pt-2 text-[8px] font-bold text-red-600 border-t border-slate-100 mt-2 uppercase tracking-wide font-mono">
+                    Supervised CareSync ruleset: 6 criteria surveyed.
                   </div>
                 </div>
 
                 {/* 4. Specialist Recommendation Block */}
-                <div className="bg-[#1c1d35]/50 border border-[#818cf8]/40 p-3 flex flex-col justify-between">
-                  <div className="flex items-center justify-between pb-2 border-b border-[#1C2E44]/60">
-                    <span className="text-[9.5px] font-bold text-[#818cf8] uppercase tracking-wider flex items-center space-x-1">
+                <div className="bg-indigo-50 border border-indigo-100 p-3.5 flex flex-col justify-between rounded-sm">
+                  <div className="flex items-center justify-between pb-2 border-b border-indigo-100/60">
+                    <span className="text-[9.5px] font-extrabold text-indigo-850 uppercase tracking-wider flex items-center space-x-1 font-mono">
                       <Stethoscope size={11} />
-                      <span>Prominent Specialist Dispatch</span>
+                      <span>Specialist Placement recommendation</span>
                     </span>
-                    <span className="text-[7px] text-neutral-400 border border-[#818cf8]/30 px-1 py-0.2 uppercase bg-[#0e0e18]">Rule Applied</span>
+                    <span className="text-[7.5px] text-indigo-600 font-bold uppercase bg-white border border-indigo-150 px-1.5 py-0.2 rounded-sm font-mono">Rule active</span>
                   </div>
-                  <div className="my-2 select-all">
-                    <div className="text-[17px] font-bold font-mono text-[#828df9] tracking-tight uppercase">
+                  <div className="my-2 select-all font-mono">
+                    <div className="text-[17px] font-black text-indigo-805 tracking-tight uppercase text-indigo-750">
                       {metrics.specialist}
                     </div>
-                    <div className="text-[7.5px] text-neutral-500">ROUTED SPECIALIST OFFICE</div>
+                    <div className="text-[7.5px] text-indigo-500 uppercase font-black tracking-widest mt-0.5">Assigned Target Team</div>
                   </div>
-                  <p className="text-[8.5px] text-neutral-400 font-sans italic leading-tight">
+                  <p className="text-[9px] text-[#1E40AF] font-sans leading-tight font-medium">
                     {selectedPatient.priority === "Critical" && metrics.severeCount >= 2 
                       ? "Dispatched because multi-vitals severe failure trigger rules highlight patient's critical risk."
                       : selectedPatient.spo2 < 93 
@@ -4489,61 +4884,59 @@ export default function App() {
                 </div>
 
                 {/* 5. Vitals Grid Dashboard */}
-                <div className="border border-[#1C2E44]">
-                  <div className="bg-[#0E1525] p-1.5 px-3 border-b border-[#1C2E44] text-[8.5px] font-bold uppercase text-neutral-400">
-                    Live Vitals Record
+                <div className="border border-slate-200 bg-white rounded-sm overflow-hidden shadow-2xs">
+                  <div className="bg-slate-50 p-2 px-3 border-b border-slate-200 text-[8px] font-bold uppercase text-slate-400 font-mono tracking-wider">
+                    Recent telemetry measurement capture
                   </div>
-                  <div className="grid grid-cols-3 divide-x divide-y divide-[#1C2E44] bg-[#0E1525] text-left text-[9.5px]">
-                    <div className="p-2 flex flex-col">
-                      <span className="text-[7px] text-neutral-500 font-bold uppercase">HEART RATE</span>
-                      <span className="text-[#00E676] font-bold text-[13px]">{selectedPatient.hr} <small className="text-[7.5px] text-neutral-400">bpm</small></span>
+                  <div className="grid grid-cols-3 divide-x divide-y divide-slate-100 bg-white text-left text-[9.5px] font-mono">
+                    <div className="p-2.5 flex flex-col">
+                      <span className="text-[7px] text-slate-400 font-bold uppercase">HERT RATE</span>
+                      <span className="text-[#059669] font-extrabold text-[13px]">{selectedPatient.hr} <small className="text-[7.5px] text-slate-400 font-medium font-sans">bpm</small></span>
                     </div>
-                    <div className="p-2 flex flex-col border-t-0!">
-                      <span className="text-[7px] text-neutral-500 font-bold uppercase">SPO2</span>
-                      <span className="text-[#00E5FF] font-bold text-[13px]">{selectedPatient.spo2}%</span>
+                    <div className="p-2.5 flex flex-col border-t-0!">
+                      <span className="text-[7px] text-slate-400 font-bold uppercase">SPO2 SAT</span>
+                      <span className="text-[#0284C7] font-extrabold text-[13px]">{selectedPatient.spo2}%</span>
                     </div>
-                    <div className="p-2 flex flex-col">
-                      <span className="text-[7px] text-neutral-500 font-bold uppercase">BLOOD PRESSURE</span>
-                      <span className="text-[#FF5252] font-semibold text-[13px] font-mono whitespace-nowrap">{selectedPatient.bpSys}/{selectedPatient.bpDia}</span>
+                    <div className="p-2.5 flex flex-col">
+                      <span className="text-[7px] text-slate-400 font-bold uppercase">ART. BP</span>
+                      <span className="text-red-650 font-extrabold text-[13px] whitespace-nowrap">{selectedPatient.bpSys}/{selectedPatient.bpDia}</span>
                     </div>
-                    <div className="p-2 flex flex-col">
-                      <span className="text-[7px] text-neutral-500 font-bold uppercase">TEMPERATURE</span>
-                      <span className="text-[#FFD740] font-bold text-[13px]">{selectedPatient.temp.toFixed(1)}°C</span>
+                    <div className="p-2.5 flex flex-col">
+                      <span className="text-[7px] text-slate-400 font-bold uppercase">TEMP</span>
+                      <span className="text-amber-600 font-extrabold text-[13px]">{selectedPatient.temp.toFixed(1)}°C</span>
                     </div>
-                    <div className="p-2 flex flex-col">
-                      <span className="text-[7px] text-neutral-500 font-bold uppercase">RESP RATE</span>
-                      <span className="text-[#AA80FF] font-bold text-[13px]">{selectedPatient.rr} <small className="text-[7.5px] text-neutral-400">/min</small></span>
+                    <div className="p-2.5 flex flex-col">
+                      <span className="text-[7px] text-slate-400 font-bold uppercase">RESP RATE</span>
+                      <span className="text-[#7C3AED] font-extrabold text-[13px]">{selectedPatient.rr} <small className="text-[7.5px] text-slate-400 font-medium font-sans">/min</small></span>
                     </div>
-                    <div className="p-2 flex flex-col">
-                      <span className="text-[7px] text-neutral-500 font-bold uppercase">EtCO2</span>
-                      <span className="text-[#FF9100] font-semibold text-[13px]">{selectedPatient.co2} <small className="text-[7px] text-neutral-400">mmHg</small></span>
+                    <div className="p-2.5 flex flex-col">
+                      <span className="text-[7px] text-slate-400 font-bold uppercase">EtCO2</span>
+                      <span className="text-[#EA580C] font-extrabold text-[13px]">{selectedPatient.co2} <small className="text-[7px] text-slate-400 font-medium font-sans">mmHg</small></span>
                     </div>
                   </div>
                 </div>
 
                 {/* 6. Predictive Alert for Critical Risk */}
-                <div className="border border-[#1C2E44] bg-[#0E1525] p-3 text-[9px] space-y-1.5">
-                  <div className="flex justify-between items-center text-[7.5px] uppercase font-bold text-red-400 pb-1 border-b border-[#1C2E44]/40">
-                    <span>PREDICTIVE RISKS INDEX</span>
-                    <span>30-MINUTES FORECAST</span>
+                <div className="border border-slate-200 bg-white p-3 space-y-1.5 rounded-sm shadow-2xs font-mono">
+                  <div className="flex justify-between items-center text-[7.5px] uppercase font-black text-slate-400 pb-1.5 border-b border-slate-100">
+                    <span>INDEXED FORECAST MATHS</span>
+                    <span>30-MINUTES WINDOW</span>
                   </div>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-neutral-400">Becoming Critical Probability:</span>
-                    <span className="text-neutral-100 text-[11px] font-bold font-mono px-1 py-0.2 bg-[#141E33] border border-[#1C2E44]" style={{ color: priorityColor }}>
-                      {selectedPatient.riskScore}% Risk
+                  <div className="flex justify-between items-baseline mt-1">
+                    <span className="text-slate-500 font-bold text-[9px]">Deterioration probability:</span>
+                    <span className="text-slate-800 text-[11px] font-black px-1.5 py-0.2 bg-slate-50 border border-slate-200 rounded-sm">
+                      {selectedPatient.riskScore}%
                     </span>
                   </div>
-                  <div>
-                    <span className="text-neutral-400">Prediction Outcome: </span>
-                    <span className="font-bold text-white uppercase">
-                      {selectedPatient.riskScore > 65 
-                        ? "Likely to become critical in next 30 minutes" 
-                        : "Low chance of acute decompensation"}
+                  <div className="text-[9px] leading-tight">
+                    <span className="text-slate-500 font-bold">Severity designation: </span>
+                    <span className="font-extrabold text-[#DC2626]" style={{ color: priorityColor }}>
+                      {selectedPatient.priority.toUpperCase()} ACTION REQUIRED
                     </span>
                   </div>
-                  <div>
-                    <span className="text-neutral-400">Underlying Forecast Reasoning: </span>
-                    <span className="text-neutral-300 italic font-sans block text-[8.5px] leading-tight pt-0.5">
+                  <div className="pt-1.5 border-t border-slate-100">
+                    <span className="text-slate-500 font-bold text-[8.5px] block uppercase tracking-wider mb-0.5">Algorithmic rationale:</span>
+                    <span className="text-slate-600 italic font-sans block text-[9px] leading-tight pt-0.5">
                       {selectedPatient.riskScore > 65 
                         ? "Continuous SpO₂ decrement trend coupled with high basal heart rate and febrile indices triggers risk probability."
                         : "Consistent autonomic homeostasis is maintained; vital signs fluctuations are within healthy parameters."}
@@ -4554,20 +4947,20 @@ export default function App() {
               </div>
 
               {/* Actions Footnote - Sync active monitor button */}
-              <div className="p-3 bg-[#0E1525] border-t border-[#1C2E44] flex space-x-2">
+              <div className="p-3 bg-slate-50 border-t border-slate-200 flex space-x-2">
                 <button 
                   onClick={() => {
                     setActivePatientId(selectedPatient.id);
                     setActiveTab("live");
                     setSelectedPatientId(null);
                   }}
-                  className="flex-1 py-2 bg-[#00E676] hover:bg-[#00c853] text-black font-bold uppercase text-[9px] tracking-widest text-center cursor-pointer transition-colors"
+                  className="flex-1 py-3 bg-[#2563EB] hover:bg-blue-700 text-white font-extrabold uppercase text-[9px] tracking-wider text-center cursor-pointer transition-colors rounded-sm shadow-2xs"
                 >
-                  SELECT AS LIVE MONITOR
+                  ASSIGN MAIN COCKPIT FOCUS
                 </button>
                 <button 
                   onClick={() => setSelectedPatientId(null)}
-                  className="px-4 py-2 border border-[#1C2E44] text-neutral-400 hover:text-white hover:bg-neutral-800 text-[9px] font-bold uppercase transition-colors cursor-pointer"
+                  className="px-4 py-3 border border-slate-250 bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-[9px] font-extrabold uppercase transition-colors cursor-pointer rounded-sm"
                 >
                   DISMISS
                 </button>
