@@ -4516,7 +4516,7 @@ export default function App() {
                       <span className="text-[#38BDF8]">2. Edge Gateway</span>
                       <span className="text-[6.5px] text-slate-500 font-semibold block mt-1">SIM card edge data streams via fast WebSockets</span>
                     </div>
-                    <div className="p-2 border border-slate-800 bg-slate-950/40 rounded flex flex-col justify-between whitespace-nowrap">
+                    <div className="p-2 border border-slate-800 bg-slate-950/40 rounded flex flex-col justify-between">
                       <span className="text-amber-500 animate-pulse">3. AI Predictor</span>
                       <span className="text-[6.5px] text-slate-500 font-semibold block mt-1">Local Edge ML maps triage health hazards in real-time</span>
                     </div>
