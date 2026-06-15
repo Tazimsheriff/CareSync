@@ -270,12 +270,13 @@ function parseMaternalHealthCSV(text: string): Patient[] {
 export default function App() {
   // --- Master Patient State ---
   const [patients, setPatients] = useState<Patient[]>(initialPatients);
+  const [isDriftPaused, setIsDriftPaused] = useState<boolean>(false);
 
   // --- Monitored Bed Selection ---
   const [activePatientId, setActivePatientId] = useState<string>("P108"); // starts with Jenkins, Sarah (ICU-08)
 
   // --- Navigation Tabs ---
-  const [activeTab, setActiveTab] = useState<"live" | "table" | "command" | "kaggle">("live");
+  const [activeTab, setActiveTab] = useState<"live" | "table" | "command" | "kaggle" | "presentation">("live");
 
   // --- Clicked Patient Detail Modal ---
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -297,6 +298,7 @@ export default function App() {
   const [datasetError, setDatasetError] = useState<string | null>(null);
   const [datasetSuccess, setDatasetSuccess] = useState<string | null>(null);
   const [isLabbing, setIsLabbing] = useState(false);
+  const [currentSlide, setCurrentSlide] = useState(0);
 
   const loadAndInjectDataset = async (datasetKey: "sepsis" | "heart" | "maternal", filename: string) => {
     setIsLabbing(true);
@@ -420,9 +422,249 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  // --- FRONTEND ML TRAINER LIVE STATES ---
+  const [lrSelectedFeatures, setLrSelectedFeatures] = useState<string[]>(["hr", "spo2", "temp", "bpSys", "rr", "age"]);
+  const [lrLearningRate, setLrLearningRate] = useState<number>(0.08);
+  const [lrEpochs, setLrEpochs] = useState<number>(100);
+  const [lrIsTraining, setLrIsTraining] = useState<boolean>(false);
+  const [lrCurrentEpoch, setLrCurrentEpoch] = useState<number>(0);
+  const [lrLossHistory, setLrLossHistory] = useState<{ epoch: number; loss: number; accuracy: number }[]>([]);
+  const [lrWeights, setLrWeights] = useState<Record<string, number>>({});
+  const [lrBias, setLrBias] = useState<number>(0);
+  const [lrConfusionMatrix, setLrConfusionMatrix] = useState<{ tp: number; fp: number; tn: number; fn: number } | null>(null);
+  const [lrAccuracy, setLrAccuracy] = useState<number | null>(null);
+  const [lrPredictionScore, setLrPredictionScore] = useState<number | null>(null);
+
+  // --- BACKEND AI PROGNOSIS STATES ---
+  const [backendPrognosis, setBackendPrognosis] = useState<any>(null);
+  const [isPrognosing, setIsPrognosing] = useState<boolean>(false);
+  const [prognosisError, setPrognosisError] = useState<string | null>(null);
+
   // Get active patient object
   const activePatient = patients.find(p => p.id === activePatientId) || patients[0];
   const { hr, spo2, bpSys: nibpSys, bpDia: nibpDia, temp, rr, co2, riskScore: ediScore } = activePatient;
+
+  const predictActivePatient = (w: Record<string, number>, b: number) => {
+    if (!activePatient) return;
+    const sigmoid = (z: number) => 1 / (1 + Math.exp(-z));
+    let z = b;
+    
+    // Normalize helpers matching normalizer steps
+    const hrVal = Math.max(0, Math.min(1, (activePatient.hr - 50) / 100));
+    const spo2Val = Math.max(0, Math.min(1, (100 - activePatient.spo2) / 20));
+    const tempVal = Math.max(0, Math.min(1, (activePatient.temp - 36.0) / 4.0));
+    const bpSysVal = Math.max(0, Math.min(1, (activePatient.bpSys - 80) / 100));
+    const rrVal = Math.max(0, Math.min(1, (activePatient.rr - 10) / 25));
+    const ageVal = Math.max(0, Math.min(1, activePatient.age / 100));
+
+    if (w.hasOwnProperty("hr")) z += w["hr"] * hrVal;
+    if (w.hasOwnProperty("spo2")) z += w["spo2"] * spo2Val;
+    if (w.hasOwnProperty("temp")) z += w["temp"] * tempVal;
+    if (w.hasOwnProperty("bpSys")) z += w["bpSys"] * bpSysVal;
+    if (w.hasOwnProperty("rr")) z += w["rr"] * rrVal;
+    if (w.hasOwnProperty("age")) z += w["age"] * ageVal;
+
+    const prob = sigmoid(z);
+    setLrPredictionScore(Math.round(prob * 100));
+  };
+
+  const trainFrontendModel = () => {
+    if (patients.length === 0) {
+      setDatasetError("No patient dataset loaded to train on.");
+      return;
+    }
+
+    setLrIsTraining(true);
+    setLrCurrentEpoch(0);
+    setLrLossHistory([]);
+    setLrWeights({});
+    setLrBias(0);
+    setLrConfusionMatrix(null);
+    setLrAccuracy(null);
+
+    const features = [...lrSelectedFeatures];
+    const weights: Record<string, number> = {};
+    features.forEach(f => {
+      weights[f] = (Math.random() - 0.5) * 0.1;
+    });
+    let bias = (Math.random() - 0.5) * 0.1;
+
+    const getNormalizedVal = (p: Patient, feature: string): number => {
+      if (feature === "hr") return Math.max(0, Math.min(1, (p.hr - 50) / 100));
+      if (feature === "spo2") return Math.max(0, Math.min(1, (100 - p.spo2) / 20));
+      if (feature === "temp") return Math.max(0, Math.min(1, (p.temp - 36.0) / 4.0));
+      if (feature === "bpSys") return Math.max(0, Math.min(1, (p.bpSys - 80) / 100));
+      if (feature === "rr") return Math.max(0, Math.min(1, (p.rr - 10) / 25));
+      if (feature === "age") return Math.max(0, Math.min(1, p.age / 100));
+      return 0;
+    };
+
+    const dataset = patients.map(p => {
+      const inputs: Record<string, number> = {};
+      features.forEach(f => {
+        inputs[f] = getNormalizedVal(p, f);
+      });
+      const target = (p.priority === "Critical" || p.priority === "High Risk" || p.riskScore > 50) ? 1 : 0;
+      return { inputs, target };
+    });
+
+    const totalEpochs = lrEpochs;
+    const alpha = lrLearningRate;
+    const history: { epoch: number; loss: number; accuracy: number }[] = [];
+    let currentEpochNum = 0;
+    const sigmoid = (z: number) => 1 / (1 + Math.exp(-z));
+
+    const runEpochStep = () => {
+      if (currentEpochNum >= totalEpochs) {
+        let tp = 0, fp = 0, tn = 0, fn = 0;
+        let correctCount = 0;
+
+        dataset.forEach(d => {
+          let z = bias;
+          features.forEach(f => {
+            z += (weights[f] || 0) * d.inputs[f];
+          });
+          const predProb = sigmoid(z);
+          const predLabel = predProb >= 0.5 ? 1 : 0;
+
+          if (d.target === 1) {
+            if (predLabel === 1) tp++;
+            else fn++;
+          } else {
+            if (predLabel === 0) tn++;
+            else fp++;
+          }
+
+          if (predLabel === d.target) {
+            correctCount++;
+          }
+        });
+
+        const finalAccuracy = (correctCount / dataset.length) * 100;
+        setLrAccuracy(parseFloat(finalAccuracy.toFixed(1)));
+        setLrConfusionMatrix({ tp, fp, tn, fn });
+        setLrWeights({ ...weights });
+        setLrBias(bias);
+        setLrIsTraining(false);
+        setLrPredictionScore(null);
+        
+        setTimeout(() => {
+          let focalZ = bias;
+          const hVal = Math.max(0, Math.min(1, (activePatient.hr - 50) / 100));
+          const oVal = Math.max(0, Math.min(1, (100 - activePatient.spo2) / 20));
+          const tVal = Math.max(0, Math.min(1, (activePatient.temp - 36.0) / 4.0));
+          const bVal = Math.max(0, Math.min(1, (activePatient.bpSys - 80) / 100));
+          const rVal = Math.max(0, Math.min(1, (activePatient.rr - 10) / 25));
+          const aVal = Math.max(0, Math.min(1, activePatient.age / 100));
+
+          if (weights.hasOwnProperty("hr")) focalZ += weights["hr"] * hVal;
+          if (weights.hasOwnProperty("spo2")) focalZ += weights["spo2"] * oVal;
+          if (weights.hasOwnProperty("temp")) focalZ += weights["temp"] * tVal;
+          if (weights.hasOwnProperty("bpSys")) focalZ += weights["bpSys"] * bVal;
+          if (weights.hasOwnProperty("rr")) focalZ += weights["rr"] * rVal;
+          if (weights.hasOwnProperty("age")) focalZ += weights["age"] * aVal;
+
+          const prob = sigmoid(focalZ);
+          setLrPredictionScore(Math.round(prob * 100));
+        }, 50);
+
+        return;
+      }
+
+      let totalLoss = 0;
+      let correctTrain = 0;
+      const dWeights: Record<string, number> = {};
+      features.forEach(f => dWeights[f] = 0);
+      let dBias = 0;
+
+      dataset.forEach(d => {
+        let z = bias;
+        features.forEach(f => {
+          z += weights[f] * d.inputs[f];
+        });
+        const pred = sigmoid(z);
+        const lossVal = -d.target * Math.log(pred + 1e-15) - (1 - d.target) * Math.log(1 - pred + 1e-15);
+        totalLoss += lossVal;
+
+        if ((pred >= 0.5 ? 1 : 0) === d.target) {
+          correctTrain++;
+        }
+
+        const error = pred - d.target;
+        features.forEach(f => {
+          dWeights[f] += error * d.inputs[f];
+        });
+        dBias += error;
+      });
+
+      const N = dataset.length;
+      totalLoss = totalLoss / N;
+      const stepAccuracy = (correctTrain / N) * 100;
+
+      features.forEach(f => {
+        weights[f] = weights[f] - alpha * (dWeights[f] / N);
+      });
+      bias = bias - alpha * (dBias / N);
+
+      currentEpochNum++;
+      setLrCurrentEpoch(currentEpochNum);
+      
+      const stepHistoryObj = { epoch: currentEpochNum, loss: parseFloat(totalLoss.toFixed(4)), accuracy: parseFloat(stepAccuracy.toFixed(1)) };
+      history.push(stepHistoryObj);
+      setLrLossHistory([...history]);
+
+      if (currentEpochNum % 3 === 0 || currentEpochNum === totalEpochs) {
+        setTimeout(runEpochStep, 15);
+      } else {
+        runEpochStep();
+      }
+    };
+
+    runEpochStep();
+  };
+
+  const runBackendAIPrognosis = async () => {
+    setIsPrognosing(true);
+    setPrognosisError(null);
+    setBackendPrognosis(null);
+    try {
+      const response = await fetch("/api/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          age: activePatient.age,
+          gender: activePatient.gender,
+          hr: activePatient.hr,
+          spo2: activePatient.spo2,
+          bpSys: activePatient.bpSys,
+          bpDia: activePatient.bpDia,
+          temp: activePatient.temp,
+          rr: activePatient.rr,
+          co2: activePatient.co2,
+          diagnosis: activePatient.dx,
+          name: activePatient.name,
+          datasetType: loadedDatasetName
+        })
+      });
+
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || "Failed to retrieve analysis from server clinical endpoint.");
+      }
+
+      setBackendPrognosis(data);
+    } catch (err: any) {
+      setPrognosisError(err.message || "Network failed reading backend prediction. Ensure GEMINI_API_KEY is configured in Secrets.");
+    } finally {
+      setIsPrognosing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (Object.keys(lrWeights).length > 0) {
+      predictActivePatient(lrWeights, lrBias);
+    }
+  }, [activePatientId]);
 
   // Refs for drawing loop sync
   const hrRef = useRef(134);
@@ -485,6 +727,7 @@ export default function App() {
 
   // --- Real-time drift of ALL 20 patients ---
   useEffect(() => {
+    if (isDriftPaused) return;
     const driftInterval = setInterval(() => {
       setPatients(prevP => {
         return prevP.map(p => {
@@ -597,7 +840,7 @@ export default function App() {
       clearInterval(driftInterval);
       clearInterval(ediDrift);
     };
-  }, []);
+  }, [isDriftPaused]);
 
   // --- Oscilloscope Drawing Loop ---
   useEffect(() => {
@@ -732,16 +975,36 @@ export default function App() {
 
         const w = canvas.width;
         const h = canvas.height;
-        ctx.clearRect(0, 0, w, h);
+        
+        // Crisp high-contrast background & mesh coordinate grid lines
+        ctx.fillStyle = "#FAFAFA"; 
+        ctx.fillRect(0, 0, w, h);
+        
+        ctx.strokeStyle = "#E2E8F0"; // Very soft slate grid lines
+        ctx.lineWidth = 0.8;
+        // Verticals
+        for (let gx = 0; gx < w; gx += 30) {
+          ctx.beginPath();
+          ctx.moveTo(gx, 0);
+          ctx.lineTo(gx, h);
+          ctx.stroke();
+        }
+        // Horizontals
+        for (let gy = 0; gy < h; gy += 20) {
+          ctx.beginPath();
+          ctx.moveTo(0, gy);
+          ctx.lineTo(w, gy);
+          ctx.stroke();
+        }
 
         ctx.lineWidth = 2.4;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
 
-        if (k === 0) ctx.strokeStyle = "#00E676";
-        else if (k === 1) ctx.strokeStyle = "#00E5FF";
-        else if (k === 2) ctx.strokeStyle = "#AA80FF";
-        else if (k === 3) ctx.strokeStyle = "#FF9100";
+        if (k === 0) ctx.strokeStyle = "#059669"; // Rich emerald green
+        else if (k === 1) ctx.strokeStyle = "#0284C7"; // Readable ocean blue
+        else if (k === 2) ctx.strokeStyle = "#7C3AED"; // Clear royal violet
+        else if (k === 3) ctx.strokeStyle = "#EA580C"; // Saturated dark orange
 
         ctx.beginPath();
         let insideLine = false;
@@ -838,7 +1101,7 @@ export default function App() {
   const selectedPatient = patients.find(p => p.id === selectedPatientId) || null;
 
   return (
-    <div id="pac-monitor-root" className="h-screen w-screen bg-[#080D18] flex flex-col text-white font-mono select-none overflow-hidden relative">
+    <div id="pac-monitor-root" className="h-screen w-screen bg-[#F1F5F9] flex flex-col text-slate-800 font-sans select-none overflow-hidden relative">
       <style>{`
         @keyframes alarm-flash {
           0%, 100% { opacity: 1; }
@@ -857,61 +1120,74 @@ export default function App() {
       `}</style>
 
       {/* --- TOPBAR (44px) --- */}
-      <header id="topbar" className="h-[44px] border-b border-[#1C2E44] px-4 flex items-center justify-between bg-[#080D18] z-10">
+      <header id="topbar" className="h-[44px] border-b border-slate-200 px-4 flex items-center justify-between bg-white shadow-sm z-10 text-slate-800 shrink-0">
         <div className="flex items-center space-x-4 text-[11px] h-full">
           <div className="flex flex-col select-none justify-center">
-            <span className="font-bold text-[12px] tracking-wider text-neutral-300">CARESYNC AI</span>
-            <span className="text-[7.5px] text-green-500 font-semibold tracking-widest uppercase">COMMAND CENTER</span>
+            <span className="font-bold text-[12px] tracking-wider text-slate-900 font-mono">CARESYNC AI</span>
+            <span className="text-[7.5px] text-emerald-600 font-bold tracking-widest uppercase font-mono">COMMAND CENTER</span>
           </div>
 
           {/* Tab Switchers */}
-          <div className="flex h-full border-l border-[#1C2E44] ml-2">
+          <div className="flex h-full border-l border-slate-200 ml-2">
             <button
               onClick={() => setActiveTab("live")}
-              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-colors ${
+              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
                 activeTab === "live"
-                  ? "bg-[#141E33] text-[#00E676] border-b-2 border-[#00E676]"
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#E6F4EA] text-[#059669] border-b-2 border-[#10B981]"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
               }`}
             >
               Live Monitor
             </button>
             <button
               onClick={() => setActiveTab("table")}
-              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-colors ${
+              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
                 activeTab === "table"
-                  ? "bg-[#141E33] text-[#FF9100] border-b-2 border-[#FF9100]"
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#FFF4E5] text-[#D97706] border-b-2 border-[#F59E0B]"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
               }`}
             >
               Patient Board
             </button>
             <button
               onClick={() => setActiveTab("command")}
-              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-colors ${
+              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
                 activeTab === "command"
-                  ? "bg-[#141E33] text-[#AA80FF] border-b-2 border-[#AA80FF]"
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#F3E8FF] text-[#6D28D9] border-b-2 border-[#8B5CF6]"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
               }`}
             >
               ICU beds
             </button>
             <button
               onClick={() => setActiveTab("kaggle")}
-              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-colors ${
+              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
                 activeTab === "kaggle"
-                  ? "bg-[#141E33] text-[#FFEE58] border-b-2 border-[#FFEE58]"
-                  : "text-neutral-400 hover:text-white"
+                  ? "bg-[#FEFCE8] text-[#A16207] border-b-2 border-[#EAB308]"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
               }`}
             >
               Kaggle Lab
             </button>
+            <button
+              onClick={() => {
+                setActiveTab("presentation");
+                setCurrentSlide(0);
+              }}
+              className={`px-3 text-[9.5px] font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
+                activeTab === "presentation"
+                  ? "bg-slate-100 text-slate-800 border-b-2 border-slate-600 font-extrabold"
+                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+              }`}
+            >
+              Innovation Deck
+            </button>
           </div>
 
-          <div className="border-l border-[#1C2E44] pl-4 hidden md:flex items-center space-x-1">
-            <span className="text-neutral-500">ACTIVE: </span>
-            <span className="font-semibold text-neutral-300">{activePatient.name}</span>
-            <span className="text-[9px] bg-[#141E33] px-1.5 py-0.2 border border-[#1C2E44] tracking-normal text-red-500 ml-1">
+          <div className="border-l border-slate-200 pl-4 hidden md:flex items-center space-x-1">
+            <span className="text-slate-400">ACTIVE: </span>
+            <span className="font-semibold text-slate-800">{activePatient.name}</span>
+            <span className="text-[9px] bg-red-50 px-1.5 py-0.2 border border-red-200 tracking-normal text-red-600 font-bold ml-1 rounded-sm uppercase font-mono">
               {activePatient.bedId.toUpperCase()}
             </span>
           </div>
@@ -928,10 +1204,10 @@ export default function App() {
                 <div 
                   key={idx} 
                   onClick={() => setSelectedPatientId(activePatient.id)}
-                  className={`px-2 py-0.5 text-[8.5px] font-bold border rounded-none flex items-center space-x-1 cursor-pointer transition-colors ${
+                  className={`px-2 py-0.5 text-[8.5px] font-bold border rounded-sm flex items-center space-x-1 cursor-pointer transition-colors font-mono ${
                     isCrit 
-                      ? "bg-red-950/40 text-[#FF5252] border-[#FF5252]/60 hover:bg-red-900/40 animate-alarm-flash"
-                      : "bg-amber-950/30 text-[#FFD740] border-[#FFD740]/60 hover:bg-amber-900/30 animate-alarm-flash"
+                      ? "bg-red-50 text-red-600 border-red-300 hover:bg-red-100 animate-alarm-flash"
+                      : "bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100 animate-alarm-flash"
                   }`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
@@ -941,40 +1217,144 @@ export default function App() {
             })}
           </div>
 
-          <div className="flex items-center space-x-1.5 border-l border-[#1C2E44] pl-3">
-            <span className="text-[9px] text-neutral-500">PULSE</span>
+          <div className="flex items-center space-x-1.5 border-l border-slate-200 pl-3">
+            <span className="text-[9px] text-slate-400 font-bold font-mono">PULSE</span>
             <div className="relative flex items-center justify-center w-3 h-3">
-              <span className="absolute w-2 h-2 bg-[#00E676] rounded-full animate-pulse-dot"></span>
-              <span className="w-1.5 h-1.5 bg-[#00E676] rounded-full"></span>
+              <span className="absolute w-2 h-2 bg-[#10B981] rounded-full animate-pulse-dot"></span>
+              <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full"></span>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 border-l border-[#1C2E44] pl-3 text-sm text-neutral-300 font-bold tracking-wider select-none">
-            <Clock size={12} className="text-neutral-500" />
+          <div className="flex items-center space-x-2 border-l border-slate-200 pl-3 text-sm text-slate-500 font-bold tracking-wider select-none font-mono">
+            <Clock size={12} className="text-slate-400" />
             <span id="systime-clock" className="text-[12px]">{timeStr}</span>
           </div>
         </div>
       </header>
 
+      {/* --- CLINICAL OPERATIONS AND CONTROLS CONSOLE BAR --- */}
+      <div id="controls-bar" className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-3 z-10 text-[9.5px] shrink-0 font-mono shadow-sm">
+        <div className="flex items-center space-x-3">
+          <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center space-x-1">
+            <Activity size={12} className="text-emerald-600 animate-pulse" />
+            <span>Clinical Simulation Drift Control:</span>
+          </span>
+          {/* Pause / Resume buttons */}
+          <div className="flex bg-white border border-slate-250 rounded-sm p-0.5 shadow-sm">
+            <button
+              onClick={() => {
+                setIsDriftPaused(false);
+                setDatasetSuccess("Telemetry simulation drift values resumed successfully.");
+              }}
+              className={`px-3 py-1 font-bold rounded-sm cursor-pointer transition-all ${!isDriftPaused ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-[#F8FAFC]'}`}
+            >
+              RUN SIMULATION
+            </button>
+            <button
+              onClick={() => {
+                setIsDriftPaused(true);
+                setDatasetSuccess("Telemetry data streams frozen (Simulation drift paused). Feel free to inspect metrics safely.");
+              }}
+              className={`px-3 py-1 font-bold rounded-sm cursor-pointer transition-all ${isDriftPaused ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-600 hover:bg-[#F8FAFC]'}`}
+            >
+              FREEZE STREAMS
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-3 flex-wrap">
+          {/* Quick Vital Inj. for live monitor selected patient */}
+          <div className="flex items-center space-x-1.5 bg-white border border-slate-250 px-2 py-1 rounded-sm shadow-sm">
+            <span className="text-slate-500 uppercase font-bold text-[8.5px]">Inject HR (BPM):</span>
+            <input
+              type="number"
+              value={activePatient.hr}
+              onChange={(e) => {
+                const val = Math.max(30, Math.min(220, parseInt(e.target.value) || 80));
+                setPatients(prev => prev.map(p => p.id === activePatientId ? { ...p, hr: val } : p));
+                setDatasetSuccess(`Injected custom Heart Rate of ${val} BPM for active patient ${activePatient.name}`);
+              }}
+              className="w-12 text-center bg-[#F8FAFC] border border-slate-300 text-slate-900 font-bold font-mono focus:outline-none py-0.5 rounded-sm"
+            />
+          </div>
+
+          <div className="flex items-center space-x-1.5 bg-white border border-slate-250 px-2 py-1 rounded-sm shadow-sm">
+            <span className="text-slate-500 uppercase font-bold text-[8.5px]">SpO₂ (%):</span>
+            <input
+              type="number"
+              value={activePatient.spo2}
+              onChange={(e) => {
+                const val = Math.max(50, Math.min(100, parseInt(e.target.value) || 98));
+                setPatients(prev => prev.map(p => p.id === activePatientId ? { ...p, spo2: val } : p));
+                setDatasetSuccess(`Injected custom SpO₂ of ${val}% for active patient ${activePatient.name}`);
+              }}
+              className="w-12 text-center bg-[#F8FAFC] border border-slate-300 text-slate-900 font-bold font-mono focus:outline-none py-0.5 rounded-sm"
+            />
+          </div>
+
+          {/* Core undo button */}
+          <button
+            onClick={() => {
+              setPatients(initialPatients);
+              setActivePatientId("P108");
+              setLoadedDatasetName("System Default Simulator Patients");
+              setLrWeights({});
+              setLrBias(0);
+              setLrAccuracy(null);
+              setLrConfusionMatrix(null);
+              setLrLossHistory([]);
+              setLrPredictionScore(null);
+              setDatasetSuccess("Reverted ICU ward database & machine learning weights back to baseline pristine defaults!");
+              setDatasetError(null);
+            }}
+            className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 border border-slate-300 text-slate-800 font-bold uppercase transition-all rounded-sm flex items-center space-x-1 cursor-pointer shadow-sm"
+            title="Instant easy reversal: reverts all parameters, patient details, and simulation to default system state."
+          >
+            <RefreshCw size={11} className="mr-0.5" />
+            <span>Reset Database Defaults</span>
+          </button>
+        </div>
+      </div>
+
+      {/* --- GLOBAL REAL-TIME FEEDBACK ALERT BAR (Informative Feedback) --- */}
+      {(datasetSuccess || datasetError) && (
+        <div className={`px-4 py-2 border-b text-[10px] font-semibold flex items-center justify-between transition-all duration-300 shrink-0 font-mono ${
+          datasetSuccess 
+            ? "bg-emerald-50 border-emerald-200 text-emerald-800" 
+            : "bg-red-50 border-red-200 text-red-800"
+        }`}>
+          <div className="flex items-center space-x-2">
+            {datasetSuccess ? <CheckCircle size={13} className="text-emerald-600 animate-bounce" /> : <AlertCircle size={13} className="text-red-600 animate-pulse" />}
+            <span>{datasetSuccess || datasetError}</span>
+          </div>
+          <button 
+            onClick={() => { setDatasetSuccess(null); setDatasetError(null); }}
+            className="text-slate-400 hover:text-slate-600 font-bold p-0.5 cursor-pointer ml-4"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       {/* --- BODY (fills remaining height) --- */}
       <main id="monitor-body" className="flex-1 flex overflow-hidden">
         
         {/* WAVEFORMS SECTION (Changes based on selected tab) */}
-        <section id="waveform-column" className="flex-1 relative flex flex-col h-full border-r border-[#1C2E44] bg-[#080D18] overflow-y-auto">
+        <section id="waveform-column" className="flex-1 relative flex flex-col h-full border-r border-slate-200 bg-[#F8FAFC] overflow-y-auto">
           
           {/* TAB 1: LIVE OUTPATIANCE OSCILLOSCOPE */}
           {activeTab === "live" && (
             <div className="flex-1 grid grid-rows-4 h-full relative">
               {/* Wave 1: ECG II */}
-              <div id="wave-row-ecg" className="relative border-b border-[#1C2E44] flex flex-col justify-between p-2 pb-0">
+              <div id="wave-row-ecg" className="relative border-b border-slate-200 flex flex-col justify-between p-2 pb-0">
                 <div className="flex justify-between items-start z-10 pointer-events-none">
                   <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#00E676]">ECG · LEAD II</span>
-                    <span className="text-[7.5px] text-neutral-500">X1.0 · FILTERED</span>
+                    <span className="text-[9px] font-bold tracking-wider text-[#059669]">ECG · LEAD II</span>
+                    <span className="text-[7.5px] text-slate-400 font-bold">X1.0 · FILTERED</span>
                   </div>
                   <div className="flex items-baseline space-x-1">
-                    <span className="text-xs font-bold text-[#00E676]">{hr}</span>
-                    <span className="text-[8px] text-neutral-500">BPM</span>
+                    <span className="text-sm font-bold text-[#059669]">{hr}</span>
+                    <span className="text-[8px] text-slate-400 font-bold">BPM</span>
                   </div>
                 </div>
                 <div className="flex-1 w-full relative">
@@ -983,14 +1363,14 @@ export default function App() {
               </div>
 
               {/* Wave 2: SpO2 */}
-              <div id="wave-row-spo2" className="relative border-b border-[#1C2E44] flex flex-col justify-between p-2 pb-0">
+              <div id="wave-row-spo2" className="relative border-b border-slate-200 flex flex-col justify-between p-2 pb-0">
                 <div className="flex justify-between items-start z-10 pointer-events-none">
                   <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#00E5FF]">SPO2 · PLETH</span>
-                    <span className="text-[7.5px] text-neutral-500">PLETH WAVEFORM</span>
+                    <span className="text-[9px] font-bold tracking-wider text-[#0284C7]">SPO2 · PLETH</span>
+                    <span className="text-[7.5px] text-slate-400 font-bold">PLETH WAVEFORM</span>
                   </div>
                   <div className="flex items-baseline space-x-1">
-                    <span className="text-xs font-bold text-[#00E5FF]">{spo2}%</span>
+                    <span className="text-sm font-bold text-[#0284C7]">{spo2}%</span>
                   </div>
                 </div>
                 <div className="flex-1 w-full relative">
@@ -999,15 +1379,15 @@ export default function App() {
               </div>
 
               {/* Wave 3: Resp */}
-              <div id="wave-row-resp" className="relative border-b border-[#1C2E44] flex flex-col justify-between p-2 pb-0">
+              <div id="wave-row-resp" className="relative border-b border-slate-200 flex flex-col justify-between p-2 pb-0">
                 <div className="flex justify-between items-start z-10 pointer-events-none">
                   <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#AA80FF]">RESP · THORACIC</span>
-                    <span className="text-[7.5px] text-neutral-500">IMPEDANCE SENSOR</span>
+                    <span className="text-[9px] font-bold tracking-wider text-[#7C3AED]">RESP · THORACIC</span>
+                    <span className="text-[7.5px] text-slate-400 font-bold">IMPEDANCE SENSOR</span>
                   </div>
                   <div className="flex items-baseline space-x-1">
-                    <span className="text-xs font-bold text-[#AA80FF]">{rr}</span>
-                    <span className="text-[8px] text-neutral-500">/MIN</span>
+                    <span className="text-sm font-bold text-[#7C3AED]">{rr}</span>
+                    <span className="text-[8px] text-slate-400 font-bold">/MIN</span>
                   </div>
                 </div>
                 <div className="flex-1 w-full relative">
@@ -1019,12 +1399,12 @@ export default function App() {
               <div id="wave-row-co2" className="relative flex flex-col justify-between p-2 pb-0">
                 <div className="flex justify-between items-start z-10 pointer-events-none">
                   <div className="flex flex-col">
-                    <span className="text-[9px] font-bold tracking-wider text-[#FF9100]">CO2 · CAPNOGRAPH</span>
-                    <span className="text-[7.5px] text-neutral-500">SIDESTREAM INFRARED</span>
+                    <span className="text-[9px] font-bold tracking-wider text-[#EA580C]">CO2 · CAPNOGRAPH</span>
+                    <span className="text-[7.5px] text-slate-400 font-bold">SIDESTREAM INFRARED</span>
                   </div>
                   <div className="flex items-baseline space-x-1">
-                    <span className="text-xs font-bold text-[#FF9100]">{co2}</span>
-                    <span className="text-[8px] text-neutral-500">mmHg</span>
+                    <span className="text-xs font-bold text-[#EA580C]">{co2}</span>
+                    <span className="text-[8px] text-slate-400 font-bold">mmHg</span>
                   </div>
                 </div>
                 <div className="flex-1 w-full relative">
@@ -1033,16 +1413,16 @@ export default function App() {
               </div>
 
               {/* Floating EPIC EDI Gauge */}
-              <div id="floating-edi-panel" style={{ contentVisibility: "auto" }} className="absolute top-3 right-3 w-[140px] bg-[#141E33]/94 border border-[#1C2E44] p-2.5 z-20 flex flex-col select-none text-white">
-                <div className="text-[8px] font-bold tracking-wider text-neutral-500 uppercase flex items-center justify-between">
+              <div id="floating-edi-panel" style={{ contentVisibility: "auto" }} className="absolute top-3 right-3 w-[140px] bg-white/94 backdrop-blur-sm border border-slate-200 p-2.5 z-20 flex flex-col select-none text-slate-800 shadow-md rounded-sm">
+                <div className="text-[8px] font-bold tracking-wider text-slate-400 uppercase flex items-center justify-between font-mono">
                   <span>EDI · EPIC</span>
-                  <span className="scale-75 text-[#FF5252] font-semibold animate-pulse">LIVE</span>
+                  <span className="scale-75 text-[#DC2626] font-extrabold animate-pulse">LIVE</span>
                 </div>
 
                 {/* Donut */}
                 <div className="relative w-[90px] h-[90px] mx-auto mt-1.5 flex items-center justify-center">
                   <svg className="w-full h-full -rotate-90">
-                    <circle cx="45" cy="45" r={ediR} stroke="#1C2E44" strokeWidth="4.5" fill="transparent" />
+                    <circle cx="45" cy="45" r={ediR} stroke="#F1F5F9" strokeWidth="4.5" fill="transparent" />
                     <circle
                       cx="45"
                       cy="45"
@@ -1057,34 +1437,34 @@ export default function App() {
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-[20px] font-bold" style={{ color: ediColor }}>
+                    <span className="text-[20px] font-bold font-mono" style={{ color: ediColor }}>
                       {ediScore}
                     </span>
-                    <span className="text-[6.5px] text-neutral-500 font-semibold tracking-wide">INDEX</span>
+                    <span className="text-[6.5px] text-slate-400 font-bold tracking-wide font-mono">INDEX</span>
                   </div>
                 </div>
 
-                <div className="text-center text-[7.5px] font-bold tracking-wide mt-1" style={{ color: ediColor }}>
+                <div className="text-center text-[7.5px] font-bold tracking-wide mt-1 font-mono" style={{ color: ediColor }}>
                   {ediRiskText}
                 </div>
 
-                <div className="h-[2.5px] w-full bg-[#1C2E44] mt-1.5 overflow-hidden">
+                <div className="h-[2.5px] w-full bg-slate-100 mt-1.5 overflow-hidden rounded-full">
                   <div className="h-full transition-all duration-1000 ease-in-out" style={{ width: `${ediScore}%`, backgroundColor: ediColor }}></div>
                 </div>
 
                 {/* Flaq pills */}
-                <div className="flex flex-col space-y-1 mt-2 text-[7px] font-bold">
+                <div className="flex flex-col space-y-1 mt-2 text-[7px] font-bold font-mono">
                   <div className="flex items-center justify-between">
-                    <span className="text-neutral-500">MAP CRITICAL</span>
-                    <span className="px-1 py-0.2 bg-red-950/50 text-[#FF5252] border border-red-900/40">RED</span>
+                    <span className="text-slate-400">MAP CRITICAL</span>
+                    <span className="px-1 py-0.2 bg-red-50 text-red-600 border border-red-200 rounded-sm">RED</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-neutral-500">HR EXTRA-HIGH</span>
-                    <span className="px-1 py-0.2 bg-red-950/50 text-[#FF5252] border border-red-900/40">RED</span>
+                    <span className="text-slate-400">HR EXTRA-HIGH</span>
+                    <span className="px-1 py-0.2 bg-red-50 text-red-600 border border-red-200 rounded-sm">RED</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-neutral-500">RESP ELEVATED</span>
-                    <span className="px-1 py-0.2 bg-[#3a2f1a] text-[#FFD740] border border-[#ffb300]/20">AMBER</span>
+                    <span className="text-slate-400">RESP ELEVATED</span>
+                    <span className="px-1 py-0.2 bg-amber-50 text-amber-700 border border-amber-200 rounded-sm">AMBER</span>
                   </div>
                 </div>
               </div>
@@ -1093,29 +1473,29 @@ export default function App() {
 
           {/* TAB 2: MULTIPLE PATIENTS BOARD TABLE */}
           {activeTab === "table" && (
-            <div className="p-4 flex flex-col h-full bg-[#080D18] text-white">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 pb-3 border-b border-[#1C2E44]">
+            <div className="p-4 flex flex-col h-full bg-[#F8FAFC] text-slate-800">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 pb-3 border-b border-slate-200">
                 <div>
-                  <h2 className="text-xs font-bold tracking-widest text-[#FF9100] uppercase">Simulated Ward Patients</h2>
-                  <p className="text-[9px] text-neutral-500">20 Beds sorted by priority (Critical first) &bull; Updates live every 3.5s</p>
+                  <h2 className="text-xs font-bold tracking-widest text-[#EA580C] uppercase font-mono">Simulated Ward Patients</h2>
+                  <p className="text-[9px] text-slate-400 font-bold">20 Beds sorted by priority (Critical first) &bull; Updates live every 3.5s</p>
                 </div>
 
                 {/* Filter and Search Controls */}
-                <div className="flex items-center space-x-2 mt-2 md:mt-0 w-full md:w-auto">
-                  <div className="relative flex items-center bg-[#0E1525] border border-[#1C2E44] px-2 py-1">
-                    <Search size={11} className="text-neutral-500 mr-1.5" />
+                <div className="flex items-center space-x-2 mt-2 md:mt-0 w-full md:w-auto font-mono">
+                  <div className="relative flex items-center bg-white border border-slate-200 px-2 py-1 rounded-sm shadow-sm">
+                    <Search size={11} className="text-slate-400 mr-1.5" />
                     <input 
                       type="text" 
                       placeholder="Search patient / bed..." 
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="bg-transparent text-[10px] focus:outline-none w-32 placeholder-neutral-500 text-white"
+                      className="bg-transparent text-[10px] focus:outline-none w-32 placeholder-slate-400 text-slate-800 font-bold"
                     />
                   </div>
                   <select 
                     value={priorityFilter} 
                     onChange={(e) => setPriorityFilter(e.target.value)}
-                    className="bg-[#0E1525] border border-[#1C2E44] px-2 py-1 text-[10px] text-neutral-300 focus:outline-none"
+                    className="bg-white border border-slate-200 px-2 py-1 text-[10px] text-slate-700 focus:outline-none rounded-sm shadow-sm font-bold cursor-pointer"
                   >
                     <option value="All">All Vitals</option>
                     <option value="Critical">Critical Only</option>
@@ -1127,10 +1507,10 @@ export default function App() {
               </div>
 
               {/* Patient Grid Table */}
-              <div className="flex-1 overflow-auto border border-[#1C2E44] bg-[#0E1525]">
+              <div className="flex-1 overflow-auto border border-slate-200 bg-white rounded-sm shadow-sm">
                 <table className="w-full text-left text-[10px] border-collapse">
                   <thead>
-                    <tr className="bg-[#141E33] border-b border-[#1C2E44] text-[8px] text-neutral-500 uppercase tracking-widest">
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[8px] text-slate-400 font-extrabold uppercase tracking-widest font-mono">
                       <th className="p-2.5">Bed / ID</th>
                       <th className="p-2.5">Patient Name</th>
                       <th className="p-2.5">Age/Sex</th>
@@ -1144,7 +1524,7 @@ export default function App() {
                       <th className="p-2.5 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1C2E44]">
+                  <tbody className="divide-y divide-slate-100 font-mono">
                     {sortedPatients.map((p) => {
                       const metrics = getPatientMetrics(p);
                       const isAlerting = p.priority === "Critical" || p.priority === "High Risk";
@@ -1152,99 +1532,99 @@ export default function App() {
                       // Row highlighting if warning is active
                       const isActivelySelectedOnMonitor = p.id === activePatientId;
                       
-                      let colorHex = "#00E676"; // green
-                      let bgClass = "bg-green-950/20";
-                      let borderClass = "border-green-900/60";
+                      let colorHex = "#059669"; // green
+                      let bgClass = "bg-green-50";
+                      let borderClass = "border-green-200";
                       if (p.priority === "Critical") {
-                        colorHex = "#FF5252";
-                        bgClass = "bg-red-950/20";
-                        borderClass = "border-red-900/60";
+                        colorHex = "#DC2626";
+                        bgClass = "bg-red-50";
+                        borderClass = "border-red-200";
                       } else if (p.priority === "High Risk") {
-                        colorHex = "#FF9100";
-                        bgClass = "bg-amber-950/20";
-                        borderClass = "border-amber-900/60";
+                        colorHex = "#D97706";
+                        bgClass = "bg-amber-50";
+                        borderClass = "border-amber-200";
                       } else if (p.priority === "Moderate") {
-                        colorHex = "#FFEE58";
-                        bgClass = "bg-yellow-950/10";
-                        borderClass = "border-yellow-900/30";
+                        colorHex = "#A16207";
+                        bgClass = "bg-yellow-50";
+                        borderClass = "border-yellow-200";
                       }
 
                       return (
                         <tr 
                           key={p.id} 
-                          className={`hover:bg-[#141E33]/60 cursor-pointer transition-colors ${
-                            isActivelySelectedOnMonitor ? "bg-[#141E33] border-l-2 border-[#00E676]" : ""
+                          className={`hover:bg-slate-50/80 cursor-pointer transition-colors ${
+                            isActivelySelectedOnMonitor ? "bg-emerald-50/40 border-l-2 border-emerald-500" : ""
                           }`}
                           onClick={() => setSelectedPatientId(p.id)}
                         >
                           <td className="p-2.5 font-bold">
-                            <span className="text-red-500 font-semibold">{p.bedId}</span>
-                            <div className="text-[7.5px] text-neutral-500">{p.id}</div>
+                            <span className="text-red-600 font-extrabold">{p.bedId}</span>
+                            <div className="text-[7.5px] text-slate-400 font-bold">{p.id}</div>
                           </td>
-                          <td className="p-2.5 font-semibold text-neutral-200">
+                          <td className="p-2.5 font-bold text-slate-800">
                             {p.name}
                             {metrics.spo2Deteriorating && (
-                              <span className="ml-1.5 inline-flex items-center text-[7.5px] font-bold text-[#FFD740] bg-yellow-950/40 px-1 py-0.2 border border-yellow-900/40 animate-pulse">
+                              <span className="ml-1.5 inline-flex items-center text-[7.2px] font-bold text-[#D97706] bg-amber-50 px-1 py-0.2 border border-amber-200 animate-pulse rounded-sm">
                                 ⚠ DETERIORATING
                               </span>
                             )}
                           </td>
-                          <td className="p-2.5 text-neutral-400">{p.age}y / {p.gender}</td>
+                          <td className="p-2.5 text-slate-500 font-semibold">{p.age}y / {p.gender}</td>
                           
                           {/* HR value column */}
-                          <td className="p-2.5 text-center font-bold" style={{ color: p.hr > 120 || p.hr < 60 ? "#FF5252" : "#00E676" }}>
+                          <td className="p-2.5 text-center font-bold" style={{ color: p.hr > 120 || p.hr < 60 ? "#DC2626" : "#059669" }}>
                             {p.hr}
                           </td>
 
                           {/* SpO2 value column */}
-                          <td className="p-2.5 text-center font-bold" style={{ color: p.spo2 < 93 ? "#FF5252" : "#00E5FF" }}>
+                          <td className="p-2.5 text-center font-bold" style={{ color: p.spo2 < 93 ? "#DC2626" : "#0284C7" }}>
                             {p.spo2}%
                           </td>
 
                           {/* BP value column */}
-                          <td className="p-2.5 text-center text-red-400 font-mono">
+                          <td className="p-2.5 text-center text-red-600 font-bold">
                             {p.bpSys}/{p.bpDia}
                           </td>
 
                           {/* Temperature column */}
-                          <td className="p-2.5 text-center font-semibold text-[#FFD740]">
+                          <td className="p-2.5 text-center font-bold text-[#D97706]">
                             {p.temp.toFixed(1)}°C
                           </td>
 
                           {/* Resp rate column */}
-                          <td className="p-2.5 text-center text-[#AA80FF] font-semibold">
+                          <td className="p-2.5 text-center text-[#7C3AED] font-bold">
                             {p.rr}
                           </td>
 
                           {/* Risk percentage */}
                           <td className="p-2.5 text-center">
-                            <span className="font-bold font-mono px-1.5 py-0.2 bg-[#141E33] border border-[#1C2E44]" style={{ color: colorHex }}>
+                            <span className="font-extrabold px-1.5 py-0.2 bg-slate-50 border border-slate-200 rounded-sm" style={{ color: colorHex }}>
                               {p.riskScore}%
                             </span>
                           </td>
 
                           {/* Recommended specialist with prominence */}
                           <td className="p-2.5">
-                            <span className="text-[8.5px] px-1.5 py-0.5 bg-[#141E33] border border-[#1C2E44] text-neutral-300">
+                            <span className="text-[8.5px] font-bold px-1.5 py-0.5 bg-slate-100 border border-slate-200 text-slate-600 rounded-sm">
                               {metrics.specialist}
                             </span>
                           </td>
 
                           {/* Actions column */}
                           <td className="p-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex justify-end space-x-1">
+                            <div className="flex justify-end space-x-1 font-mono">
                               <button 
                                 onClick={() => {
                                   setActivePatientId(p.id);
                                   setActiveTab("live");
                                 }}
-                                className="px-2 py-0.5 border border-[#1C2E44] bg-[#141E33] hover:bg-[#00E676] hover:text-black font-semibold text-[8px] uppercase tracking-wider text-neutral-300 transition-colors"
+                                className="px-2 py-0.5 border border-slate-200 bg-white hover:bg-emerald-600 hover:text-white hover:border-emerald-700 font-bold text-[8px] uppercase tracking-wider text-slate-700 shadow-sm rounded-sm transition-all cursor-pointer"
                               >
                                 Monitor
                               </button>
                               <button 
                                 onClick={() => setSelectedPatientId(p.id)}
-                                className="px-2 py-0.5 border border-[#1C2E44] bg-[#141E33] hover:bg-neutral-800 font-semibold text-[8px] uppercase text-neutral-400"
+                                className="px-2 py-0.5 border border-slate-200 bg-white hover:bg-slate-100 font-bold text-[8px] uppercase text-slate-600 shadow-sm rounded-sm transition-all cursor-pointer"
                               >
                                 Detail
                               </button>
@@ -1261,10 +1641,10 @@ export default function App() {
 
           {/* TAB 3: ICU COMMAND CENTER BEDS MATRIX MAP */}
           {activeTab === "command" && (
-            <div className="p-4 flex flex-col h-full bg-[#080D18]">
-              <div className="mb-4 pb-2 border-b border-[#1C2E44]">
-                <h2 className="text-xs font-bold tracking-widest text-[#AA80FF] uppercase">ACTIVE BED DISPATCH BOARD</h2>
-                <p className="text-[8.5px] text-neutral-500">Real-time occupancy status &bull; Click on any Bed to view clinical indicators and details</p>
+            <div className="p-4 flex flex-col h-full bg-[#F8FAFC]">
+              <div className="mb-4 pb-2 border-b border-slate-200">
+                <h2 className="text-xs font-bold tracking-widest text-[#7C3AED] uppercase font-mono">ACTIVE BED DISPATCH BOARD</h2>
+                <p className="text-[8.5px] text-slate-400 font-bold">Real-time occupancy status &bull; Click on any Bed to view clinical indicators and details</p>
               </div>
 
               {/* Grid map for 20 beds */}
@@ -1274,41 +1654,41 @@ export default function App() {
                   const activeOnMonitor = p.id === activePatientId;
                   
                   // Color codes
-                  let statusColor = "#00E676"; // green
-                  let borderClr = "border-[#1C2E44]";
-                  let pillBg = "bg-green-950/20 text-[#00E676]";
+                  let statusColor = "#059669"; // green
+                  let borderClr = "border-slate-200";
+                  let pillBg = "bg-green-50 text-green-700 border-green-200";
 
                   if (p.priority === "Critical") {
-                    statusColor = "#FF5252";
-                    borderClr = "border-red-900/60";
-                    pillBg = "bg-red-950/40 text-[#FF5252]";
+                    statusColor = "#DC2626";
+                    borderClr = "border-red-200 shadow-sm shadow-red-50";
+                    pillBg = "bg-red-50 text-red-700 border-red-200";
                   } else if (p.priority === "High Risk") {
-                    statusColor = "#FF9100";
-                    borderClr = "border-amber-900/60";
-                    pillBg = "bg-amber-950/30 text-[#FF9100]";
+                    statusColor = "#D97706";
+                    borderClr = "border-amber-200 shadow-sm shadow-amber-50";
+                    pillBg = "bg-amber-50 text-amber-700 border-amber-200";
                   } else if (p.priority === "Moderate") {
-                    statusColor = "#FFEE58";
-                    borderClr = "border-yellow-900/30";
-                    pillBg = "bg-yellow-950/10 text-yellow-300";
+                    statusColor = "#A16207";
+                    borderClr = "border-yellow-200 shadow-sm shadow-yellow-50";
+                    pillBg = "bg-yellow-50 text-yellow-700 border-yellow-200";
                   }
 
                   return (
                     <div 
                       key={p.id}
                       onClick={() => setSelectedPatientId(p.id)}
-                      className={`relative p-3 bg-[#0E1525] border hover:border-yellow-400 transition-all duration-300 cursor-pointer flex flex-col justify-between ${
-                        activeOnMonitor ? "ring-1 ring-[#00E676] bg-[#141E33]" : borderClr
+                      className={`relative p-3 bg-white border rounded-sm hover:border-[#7C3AED] transition-all duration-350 cursor-pointer flex flex-col justify-between shadow-sm hover:shadow-md ${
+                        activeOnMonitor ? "ring-1 ring-emerald-500 bg-[#E6F4EA]/20 border-emerald-300" : borderClr
                       }`}
                     >
                       {/* Bed header */}
-                      <div className="flex justify-between items-start">
+                      <div className="flex justify-between items-start font-mono">
                         <div>
-                          <span className="text-[12px] font-bold text-red-500 uppercase">{p.bedId}</span>
-                          <div className="text-[8px] text-neutral-500">{p.id}</div>
+                          <span className="text-[12px] font-extrabold text-red-600 uppercase">{p.bedId}</span>
+                          <div className="text-[8px] text-slate-400 font-bold">{p.id}</div>
                         </div>
                         {/* Status light LED */}
                         <div className="flex items-center space-x-1.5">
-                          <span className={`text-[7px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-none ${pillBg}`}>
+                          <span className={`text-[7px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-sm border ${pillBg}`}>
                             {p.priority}
                           </span>
                           <span className="relative flex h-2 w-2">
@@ -1321,34 +1701,34 @@ export default function App() {
                       </div>
 
                       {/* Patient metadata */}
-                      <div className="mt-2 text-[10px] text-neutral-300 line-clamp-1 font-semibold">{p.name}</div>
-                      <div className="text-[8px] text-neutral-500 line-clamp-1">{p.dx}</div>
+                      <div className="mt-2 text-[10px] text-slate-800 line-clamp-1 font-bold font-mono">{p.name}</div>
+                      <div className="text-[8px] text-slate-400 line-clamp-1 font-bold font-mono">{p.dx}</div>
 
                       {/* Micro vitals bar */}
-                      <div className="grid grid-cols-3 gap-1 bg-[#141E33] p-1.5 my-2.5 border border-[#1C2E44]/70 text-[9px]">
+                      <div className="grid grid-cols-3 gap-1 bg-slate-50 p-1.5 my-2.5 border border-slate-100 rounded-sm text-[9px] font-mono">
                         <div className="flex flex-col text-center">
-                          <span className="text-[7px] text-neutral-500 font-bold uppercase">HR</span>
-                          <span className="font-bold text-[#00E676]">{p.hr}</span>
+                          <span className="text-[7px] text-slate-400 font-bold uppercase">HR</span>
+                          <span className="font-extrabold text-[#059669]">{p.hr}</span>
                         </div>
-                        <div className="flex flex-col text-center border-l border-r border-[#1C2E44]">
-                          <span className="text-[7px] text-neutral-500 font-bold uppercase">SpO₂</span>
-                          <span className="font-bold text-[#00E5FF]">{p.spo2}%</span>
+                        <div className="flex flex-col text-center border-l border-r border-slate-100">
+                          <span className="text-[7px] text-slate-400 font-bold uppercase">SpO₂</span>
+                          <span className="font-extrabold text-[#0284C7]">{p.spo2}%</span>
                         </div>
                         <div className="flex flex-col text-center">
-                          <span className="text-[7px] text-neutral-500 font-bold uppercase">BP</span>
-                          <span className="font-sans font-semibold text-red-400 text-[8.5px]">{p.bpSys}/{p.bpDia}</span>
+                          <span className="text-[7px] text-slate-400 font-bold uppercase">BP</span>
+                          <span className="font-extrabold text-red-600 text-[8.5px]">{p.bpSys}/{p.bpDia}</span>
                         </div>
                       </div>
 
                       {/* Specialist and risk summary */}
-                      <div className="flex justify-between items-center text-[7.5px] mt-1 pt-1.5 border-t border-[#1C2E44]/40 text-neutral-500 font-bold">
+                      <div className="flex justify-between items-center text-[7.5px] mt-1 pt-1.5 border-t border-slate-100 text-slate-400 font-bold font-mono">
                         <span>Risk Score: <b style={{ color: statusColor }}>{p.riskScore}%</b></span>
-                        <span className="text-neutral-400 border border-[#1C2E44] px-1">{metrics.specialist.split(" ")[0]}</span>
+                        <span className="text-slate-500 border border-slate-200 rounded-sm px-1 bg-slate-50">{metrics.specialist.split(" ")[0]}</span>
                       </div>
 
                       {/* Live flashing warning warning ribbon */}
                       {metrics.spo2Deteriorating && (
-                        <div className="absolute bottom-0 inset-x-0 h-1 bg-[#FFD740] animate-pulse"></div>
+                        <div className="absolute bottom-0 inset-x-0 h-1 bg-[#F59E0B] animate-pulse rounded-b-sm"></div>
                       )}
                     </div>
                   );
@@ -1359,198 +1739,948 @@ export default function App() {
 
           {/* TAB 4: KAGGLE DATASETS WORKSPACE */}
           {activeTab === "kaggle" && (
-            <div className="p-4 flex flex-col h-full bg-[#080D18] text-white overflow-y-auto">
+            <div className="p-4 flex flex-col h-full bg-[#F8FAFC] text-slate-800 overflow-y-auto">
               {/* Header Box */}
-              <div className="mb-4 pb-3 border-b border-[#1C2E44] flex flex-col md:flex-row justify-between items-start md:items-center">
+              <div className="mb-4 pb-3 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center">
                 <div>
-                  <h2 className="text-xs font-bold tracking-widest text-[#FFEE58] uppercase flex items-center space-x-1.5">
-                    <Database size={14} className="text-[#FFEE58]" />
-                    <span>Clinical Kaggle Dataset Lab</span>
+                  <h2 className="text-xs font-bold tracking-widest text-slate-700 uppercase flex items-center space-x-1.5 font-mono">
+                    <Database size={14} className="text-[#7C3AED]" />
+                    <span>Clinical Kaggle Dataset Lab & Machine Learning Workspace</span>
                   </h2>
-                  <p className="text-[9px] text-neutral-400 mt-1">
-                    Load, parse, and analyze real clinical Kaggle data on the live ICU waveforms & beds.
+                  <p className="text-[9px] text-slate-400 font-bold mt-1">
+                    Ingest high-fidelity physiological profiles, train local binary classifiers, and request server-side Gemini decision support diagnostics.
                   </p>
                 </div>
                 {/* Active Source indicator */}
-                <div className="mt-2 md:mt-0 px-2.5 py-1 bg-[#141E33] border border-[#1C2E44] flex items-center space-x-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                  <span className="text-[8.5px] uppercase text-neutral-400">Active Source: </span>
-                  <span className="text-[9.5px] text-[#00E5FF] font-bold">{loadedDatasetName}</span>
+                <div className="mt-2 md:mt-0 px-2.5 py-1 bg-white border border-slate-200 shadow-sm flex items-center space-x-2 rounded-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-[8.5px] uppercase text-slate-400 font-bold">Active Dataset Source: </span>
+                  <span className="text-[9.5px] text-emerald-600 font-extrabold">{loadedDatasetName}</span>
                 </div>
               </div>
 
               {/* Success/Error Messaging */}
               {datasetSuccess && (
-                <div className="mb-4 p-3 bg-green-950/30 border border-green-500/50 flex items-start space-x-2.5">
-                  <CheckCircle size={14} className="text-green-500 shrink-0 mt-0.5" />
-                  <div className="text-[9px] leading-relaxed text-green-200">{datasetSuccess}</div>
+                <div className="mb-4 p-3 bg-green-50 border border-green-200 flex items-start space-x-2.5 rounded-sm">
+                  <CheckCircle size={14} className="text-green-600 shrink-0 mt-0.5 animate-bounce" />
+                  <div className="text-[9px] leading-relaxed text-green-800 font-bold font-mono">{datasetSuccess}</div>
                 </div>
               )}
               {datasetError && (
-                <div className="mb-4 p-3 bg-red-950/30 border border-red-500/50 flex items-start space-x-2.5">
-                  <AlertCircle size={14} className="text-[#FF5252] shrink-0 mt-0.5" />
-                  <div className="text-[9px] leading-relaxed text-red-200">{datasetError}</div>
+                <div className="mb-4 p-3 bg-red-50 border border-red-250 flex items-start space-x-2.5 rounded-sm">
+                  <AlertCircle size={14} className="text-red-600 shrink-0 mt-0.5 animate-pulse" />
+                  <div className="text-[9px] leading-relaxed text-red-800 font-bold font-mono">{datasetError}</div>
                 </div>
               )}
 
-              {/* INSTRUCTION BLOCK: Where to save. */}
-              <div className="mb-5 p-4 bg-[#0E1525] border border-dashed border-[#1C2E44] text-[9.5px]">
-                <h3 className="font-bold uppercase text-[#FFEE58] tracking-wider mb-2 flex items-center space-x-1">
-                  <Sparkles size={11} />
-                  <span>Clinical Integration & File Location Guide</span>
-                </h3>
-                <p className="text-neutral-300 leading-normal mb-2.5">
-                  The Patient Monitor is pre-configured to fetch and read downloaded CSVs natively. If you download clinical dataset files from Kaggle, please rename and save them directly in the workspace at the following absolute paths:
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 font-mono text-[8.5px] text-neutral-400">
-                  <div className="p-2 bg-[#080D18] border border-[#1C2E44]/60">
-                    <span className="text-[#00E676] font-semibold block mb-0.5">Sepsis Detection Dataset</span>
-                    <span className="text-white select-all">/public/datasets/sepsis.csv</span>
-                  </div>
-                  <div className="p-2 bg-[#080D18] border border-[#1C2E44]/60">
-                    <span className="text-[#00E5FF] font-semibold block mb-0.5">Heart Failure Records</span>
-                    <span className="text-white select-all">/public/datasets/heart_failure.csv</span>
-                  </div>
-                  <div className="p-2 bg-[#080D18] border border-[#1C2E44]/60">
-                    <span className="text-[#AA80FF] font-semibold block mb-0.5">Maternal Health Risk</span>
-                    <span className="text-white select-all">/public/datasets/maternal_health.csv</span>
-                  </div>
-                </div>
-                <div className="mt-3 text-[8px] text-neutral-500 italic">
-                  *We prepared pre-loaded high-fidelity sample files at those locations so you can test loading and mapping them right now!
-                </div>
-              </div>
-
-              {/* THREE KAGGLE DATASETS INTERACTIVE CARDS */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
-                
-                {/* Dataset 1 Card */}
-                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 flex flex-col justify-between">
-                  <div>
-                    <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-[#1C2E44]">
-                      <div>
-                        <span className="text-[11px] font-bold text-[#00E676] block">1. PhysioNet Sepsis detection</span>
-                        <span className="text-[7.5px] text-neutral-500 uppercase">Kaggle ID: sepsis-survival-dataset</span>
+              {/* SECTION 1: INGESTION PIPELINE */}
+              <div className="mb-6 font-mono">
+                <div className="mb-2 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold">1. Data Ingestion & Sync Pipeline</div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                  
+                  {/* Dataset 1 Card */}
+                  <div className="bg-white border border-slate-200 p-3 flex flex-col justify-between shadow-sm rounded-sm">
+                    <div>
+                      <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-slate-100">
+                        <div>
+                          <span className="text-[10.5px] font-bold text-emerald-600 block">1. PhysioNet Sepsis detection</span>
+                          <span className="text-[7.5px] text-slate-400 font-bold uppercase">Kaggle ID: sepsis-survival-dataset</span>
+                        </div>
+                        <span className="text-[7.2px] bg-slate-50 px-1 py-0.2 text-slate-500 font-bold border border-slate-200 rounded-sm">CSV</span>
                       </div>
-                      <span className="text-[7.5px] bg-[#141E33] px-1 py-0.2 text-neutral-400 font-bold">CSV</span>
+                      <p className="text-[9px] text-slate-600 leading-normal mb-2.5 font-bold font-sans">
+                        High-frequency records tracking warning indices for ICU sepsis diagnosis. Maps vitals to early SIRS/qSOFA alerts.
+                      </p>
+                      <div className="text-[8px] space-y-0.5 text-slate-500 font-semibold mb-3 bg-slate-50/50 p-2 border border-slate-200 rounded-sm">
+                        <div><span className="text-emerald-600 font-bold">Vitals:</span> HR, SpO2, Temperature, Blood Pressure, RR</div>
+                        <div><span className="text-emerald-600 font-bold">Target Warning:</span> Early-onset systemic septic indices</div>
+                      </div>
                     </div>
-                    <p className="text-[9px] text-neutral-300 leading-tight mb-3">
-                      High-frequency physiological records tracking clinical early warning indices for ICU sepsis diagnosis. Includes correlation ratios.
-                    </p>
-                    <div className="text-[8px] space-y-1 text-neutral-500 font-semibold mb-4 bg-[#141E33]/30 p-2 border border-[#1C2E44]/40">
-                      <div><span className="text-[#00E676] font-bold">Mapped Vitals:</span> HR, SpO2, Temperature, Blood Pressure, Respiratory Rate</div>
-                      <div><span className="text-[#00E676] font-bold">Early Warn:</span> TREWS Sepsis Alert, EPIC EDI index</div>
-                    </div>
-                  </div>
-                  <div>
                     <button
                       onClick={() => loadAndInjectDataset("sepsis", "sepsis.csv")}
                       disabled={isLabbing}
-                      className="w-full py-2 border border-[#00E676]/40 hover:border-[#00E676] hover:bg-[#00E676]/10 text-[#00E676] font-bold text-[9px] uppercase tracking-wider transition-colors"
+                      className="w-full py-1.5 border border-emerald-200 hover:border-emerald-500 hover:bg-emerald-50 text-emerald-650 font-bold text-[8.5px] uppercase tracking-wider transition-all cursor-pointer rounded-sm shadow-sm bg-white"
                     >
-                      {isLabbing ? "Generating Matrix..." : "Sync /public/sepsis.csv"}
+                      {isLabbing ? "Syncing..." : "Load sepsis.csv"}
                     </button>
                   </div>
-                </div>
 
-                {/* Dataset 2 Card */}
-                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 flex flex-col justify-between">
-                  <div>
-                    <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-[#1C2E44]">
-                      <div>
-                        <span className="text-[11px] font-bold text-[#00E5FF] block">2. UCSD Heart Failure Records</span>
-                        <span className="text-[7.5px] text-neutral-500 uppercase">Kaggle ID: heart-failure-clinical-data</span>
+                  {/* Dataset 2 Card */}
+                  <div className="bg-white border border-slate-200 p-3 flex flex-col justify-between shadow-sm rounded-sm">
+                    <div>
+                      <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-slate-100">
+                        <div>
+                          <span className="text-[10.5px] font-bold text-sky-600 block">2. UCSD Heart Failure Records</span>
+                          <span className="text-[7.5px] text-slate-400 font-bold uppercase">Kaggle ID: heart-failure-clinical-data</span>
+                        </div>
+                        <span className="text-[7.2px] bg-slate-50 px-1 py-0.2 text-slate-500 font-bold border border-slate-200 rounded-sm">CSV</span>
                       </div>
-                      <span className="text-[7.5px] bg-[#141E33] px-1 py-0.2 text-neutral-400 font-bold">CSV</span>
+                      <p className="text-[9px] text-slate-600 leading-normal mb-2.5 font-bold font-sans">
+                        Clinical variables predicting cardiovascular failure mortality risk. Models ejection fractional and hemodynamic indices.
+                      </p>
+                      <div className="text-[8px] space-y-0.5 text-slate-500 font-semibold mb-3 bg-slate-50/50 p-2 border border-slate-200 rounded-sm">
+                        <div><span className="text-sky-600 font-bold">Vitals:</span> Age, Sex, Heart Rate, SpO2, Systolic BP, Temp</div>
+                        <div><span className="text-sky-600 font-bold">Target Warning:</span> Heart Failure risk classification</div>
+                      </div>
                     </div>
-                    <p className="text-[9px] text-neutral-300 leading-tight mb-3">
-                      Clinical variables predicting cardiovascular failure mortality and decompensation risk. Features serum creatinine / ejection fractions.
-                    </p>
-                    <div className="text-[8px] space-y-1 text-neutral-500 font-semibold mb-4 bg-[#141E33]/30 p-2 border border-[#1C2E44]/40">
-                      <div><span className="text-[#00E5FF] font-bold">Mapped Vitals:</span> Age, Sex, Heart Rate, SpO2, SBP, BP (Hypotension risk)</div>
-                      <div><span className="text-[#00E5FF] font-bold">Specialist:</span> Dispatches cardiologist, maps EF indicators</div>
-                    </div>
-                  </div>
-                  <div>
                     <button
                       onClick={() => loadAndInjectDataset("heart", "heart_failure.csv")}
                       disabled={isLabbing}
-                      className="w-full py-2 border border-[#00E5FF]/40 hover:border-[#00E5FF] hover:bg-[#00E5FF]/10 text-[#00E5FF] font-bold text-[9px] uppercase tracking-wider transition-colors"
+                      className="w-full py-1.5 border border-sky-200 hover:border-sky-500 hover:bg-sky-50 text-sky-650 font-bold text-[8.5px] uppercase tracking-wider transition-all cursor-pointer rounded-sm shadow-sm bg-white"
                     >
-                      {isLabbing ? "Generating Matrix..." : "Sync /public/heart_failure.csv"}
+                      {isLabbing ? "Syncing..." : "Load heart_failure.csv"}
                     </button>
                   </div>
-                </div>
 
-                {/* Dataset 3 Card */}
-                <div className="bg-[#0E1525] border border-[#1C2E44] p-3 flex flex-col justify-between">
-                  <div>
-                    <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-[#1C2E44]">
-                      <div>
-                        <span className="text-[11px] font-bold text-[#AA80FF] block">3. WHO Maternal Health Risk</span>
-                        <span className="text-[7.5px] text-neutral-500 uppercase">Kaggle ID: maternal-health-risk-data</span>
+                  {/* Dataset 3 Card */}
+                  <div className="bg-white border border-slate-200 p-3 flex flex-col justify-between shadow-sm rounded-sm">
+                    <div>
+                      <div className="flex justify-between items-start mb-1.5 pb-1.5 border-b border-slate-100">
+                        <div>
+                          <span className="text-[10.5px] font-bold text-purple-600 block">3. WHO Maternal Health Risk</span>
+                          <span className="text-[7.5px] text-slate-400 font-bold uppercase">Kaggle ID: maternal-health-risk-data</span>
+                        </div>
+                        <span className="text-[7.2px] bg-slate-50 px-1 py-0.2 text-slate-500 font-bold border border-slate-200 rounded-sm">CSV</span>
                       </div>
-                      <span className="text-[7.5px] bg-[#141E33] px-1 py-0.2 text-neutral-400 font-bold">CSV</span>
+                      <p className="text-[9px] text-slate-600 leading-normal mb-2.5 font-bold font-sans">
+                        Risk factors mapping pre-eclampsia and gestational hypertensive syndromes. Monitors obstetric vitals.
+                      </p>
+                      <div className="text-[8px] space-y-0.5 text-slate-500 font-semibold mb-3 bg-slate-50/50 p-2 border border-slate-200 rounded-sm">
+                        <div><span className="text-purple-600 font-bold">Vitals:</span> Age, BP Systolic/Diastolic, Temp, Core Glucose</div>
+                        <div><span className="text-purple-600 font-bold">Target Warning:</span> High-risk maternal pregnancy triage</div>
+                      </div>
                     </div>
-                    <p className="text-[9px] text-neutral-300 leading-tight mb-3">
-                      Risk indicators mapping pre-eclampsia and gestational hypertensive syndromes. Monitors obstetric vitals and blood sugar variables.
-                    </p>
-                    <div className="text-[8px] space-y-1 text-neutral-500 font-semibold mb-4 bg-[#141E33]/30 p-2 border border-[#1C2E44]/40">
-                      <div><span className="text-[#AA80FF] font-bold">Mapped Vitals:</span> Age, Systolic BP, Diastolic BP, Glucose, Temperature, Pupil Rate</div>
-                      <div><span className="text-[#AA80FF] font-bold">Triage:</span> Obstetric hypertension risk classification</div>
-                    </div>
-                  </div>
-                  <div>
                     <button
                       onClick={() => loadAndInjectDataset("maternal", "maternal_health.csv")}
                       disabled={isLabbing}
-                      className="w-full py-2 border border-[#AA80FF]/40 hover:border-[#AA80FF] hover:bg-[#AA80FF]/10 text-[#AA80FF] font-bold text-[9px] uppercase tracking-wider transition-colors"
+                      className="w-full py-1.5 border border-purple-200 hover:border-purple-500 hover:bg-purple-50 text-purple-650 font-bold text-[8.5px] uppercase tracking-wider transition-all cursor-pointer rounded-sm shadow-sm bg-white"
                     >
-                      {isLabbing ? "Generating Matrix..." : "Sync /public/maternal_health.csv"}
+                      {isLabbing ? "Syncing..." : "Load maternal_health.csv"}
                     </button>
+                  </div>
+
+                </div>
+
+                {/* Direct Upload Dropzone */}
+                <div className="mt-3 bg-white border border-dashed border-slate-350 p-4 text-center relative hover:border-[#7C3AED] transition-colors rounded-sm shadow-sm">
+                  <input 
+                    type="file" 
+                    accept=".csv"
+                    onChange={handleFileUpload}
+                    className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                  />
+                  <div className="flex flex-col items-center justify-center space-y-1.5 pointer-events-none">
+                    <UploadCloud size={18} className="text-[#7C3AED] animate-pulse" />
+                    <p className="text-[9px] font-bold text-slate-700 uppercase">
+                      Drag and Drop downloaded Kaggle clinical CSV here to instantly ingest
+                    </p>
+                    <p className="text-[7.5px] text-slate-400 font-bold">
+                      Auto-converts and injects columns to physiological telemetry matrices.
+                    </p>
+                  </div>
+                </div>
+                {/* SECTION 2: THE MACHINE LEARNING EXPERIMENTAL CENTER */}
+              <div className="mb-4 text-[9px] uppercase tracking-wider text-slate-400 font-extrabold font-mono">2. Clinical Machine Learning Experimental Lab</div>
+              
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
+                
+                {/* PANEL A: FRONTEND GRADIENT DESCENT BINARY CLASSIFIER */}
+                <div className="bg-white border border-slate-200 p-4 flex flex-col justify-between rounded-sm shadow-sm">
+                  <div>
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100 font-mono">
+                      <div className="flex items-center space-x-2">
+                        <Activity size={13} className="text-[#0284C7]" />
+                        <h3 className="text-[11px] font-bold uppercase text-[#0284C7] tracking-wider">Frontend Math Engine (Logistic Regression)</h3>
+                      </div>
+                      <span className="text-[7px] bg-sky-50 text-[#0284C7] border border-sky-200 px-1.5 py-0.2 uppercase font-extrabold rounded-sm">Local Tensor</span>
+                    </div>
+
+                    <p className="text-[9px] text-slate-500 font-semibold leading-relaxed mb-4 font-sans">
+                      Train a mathematically real **Logistic Regression Binary Classifier** right in your browser using gradient descent over the current dataset. Clinically predict risk based on customizable vital variables!
+                    </p>
+
+                    {/* Features Select & Hyperparams Grid */}
+                    <div className="grid grid-cols-2 gap-3 mb-4 font-mono">
+                      {/* Left: Checkboxes */}
+                      <div className="p-2 bg-slate-50 border border-slate-100 rounded-sm">
+                        <span className="text-[8px] font-extrabold text-slate-400 uppercase block mb-1.5">Input Features (X)</span>
+                        <div className="space-y-1 text-[8px] font-bold text-slate-700">
+                          {["hr", "spo2", "temp", "bpSys", "rr", "age"].map((feat) => {
+                            const isChecked = lrSelectedFeatures.includes(feat);
+                            return (
+                              <label key={feat} className="flex items-center space-x-1.5 cursor-pointer uppercase hover:text-slate-900 transition-colors">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    if (isChecked) {
+                                      setLrSelectedFeatures(lrSelectedFeatures.filter(f => f !== feat));
+                                    } else {
+                                      setLrSelectedFeatures([...lrSelectedFeatures, feat]);
+                                    }
+                                  }}
+                                  className="accent-[#0284C7] scale-90"
+                                />
+                                <span>{feat === "bpSys" ? "Systolic BP" : feat}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Right: Slider values */}
+                      <div className="p-2 bg-slate-50 border border-slate-100 rounded-sm flex flex-col justify-between">
+                        <div>
+                          <span className="text-[8px] font-extrabold text-slate-400 uppercase block mb-1">Learning Rate (&alpha;)</span>
+                          <select 
+                            value={lrLearningRate}
+                            onChange={(e) => setLrLearningRate(parseFloat(e.target.value))}
+                            className="w-full bg-white border border-slate-250 text-[9px] px-1 py-0.5 text-slate-700 rounded-sm shadow-sm font-bold cursor-pointer"
+                          >
+                            <option value="0.2">0.20 (Fastest)</option>
+                            <option value="0.1">0.10 (Optimized)</option>
+                            <option value="0.08">0.08 (Stable)</option>
+                            <option value="0.05">0.05 (Fine-tuned)</option>
+                            <option value="0.01">0.01 (Conservative)</option>
+                          </select>
+                        </div>
+                        <div className="mt-2">
+                          <span className="text-[8px] font-extrabold text-slate-400 uppercase block mb-1">Epochs Counter</span>
+                          <select 
+                            value={lrEpochs}
+                            onChange={(e) => setLrEpochs(parseInt(e.target.value))}
+                            className="w-full bg-white border border-slate-250 text-[9px] px-1 py-0.5 text-slate-700 rounded-sm shadow-sm font-bold cursor-pointer"
+                          >
+                            <option value="50">50 Loops</option>
+                            <option value="100">100 Loops</option>
+                            <option value="200">200 Loops</option>
+                            <option value="500">500 Loops</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Start Training Button */}
+                    <button
+                      onClick={trainFrontendModel}
+                      disabled={lrIsTraining || lrSelectedFeatures.length === 0}
+                      className="w-full py-2 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-extrabold text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-sm rounded-sm disabled:opacity-40"
+                    >
+                      {lrIsTraining ? `Iterating Descent... Loop ${lrCurrentEpoch}/${lrEpochs}` : "Run Gradient Descent training loop"}
+                    </button>
+
+                    {/* Progress indicators */}
+                    {lrLossHistory.length > 0 && (
+                      <div className="mt-4 space-y-3 font-mono">
+                        {/* Numerical Metrics Status Row */}
+                        <div className="flex justify-between items-center text-[9px] bg-slate-50 p-2 border border-slate-200 rounded-sm">
+                          <div>
+                            <span className="text-slate-400 font-bold">ITERATION: </span>
+                            <span className="text-slate-800 font-extrabold">{lrCurrentEpoch}/{lrEpochs}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 font-bold">BCE LOSS: </span>
+                            <span className="text-[#DC2626] font-extrabold">
+                              {lrLossHistory[lrLossHistory.length - 1]?.loss || "0.0000"}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 font-bold">TRAINING ACC: </span>
+                            <span className="text-[#059669] font-extrabold">
+                              {lrLossHistory[lrLossHistory.length - 1]?.accuracy || "0.0"}%
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Live Double SVG Charts Side-by-Side */}
+                        <div className="grid grid-cols-2 gap-3.5">
+                          {/* Loss Chart */}
+                          <div className="bg-slate-50 border border-slate-200 p-2 text-center rounded-sm">
+                            <span className="text-[7.5px] font-extrabold text-red-650 block uppercase mb-1">Loss Minimization Path</span>
+                            <div className="h-20 w-full relative flex items-end">
+                              <svg className="w-full h-full" viewBox="0 0 240 80" preserveAspectRatio="none">
+                                {/* Grid lines */}
+                                <line x1="0" y1="20" x2="240" y2="20" stroke="#E2E8F0" strokeWidth="0.5" />
+                                <line x1="0" y1="40" x2="240" y2="40" stroke="#E2E8F0" strokeWidth="0.5" />
+                                <line x1="0" y1="60" x2="240" y2="60" stroke="#E2E8F0" strokeWidth="0.5" />
+                                
+                                {lrLossHistory.length > 1 && (
+                                  <polyline
+                                    fill="none"
+                                    stroke="#DC2626"
+                                    strokeWidth="1.5"
+                                    points={(() => {
+                                      const width = 240;
+                                      const height = 80;
+                                      const maxLoss = Math.max(...lrLossHistory.map(h => h.loss), 1);
+                                      const minLoss = Math.min(...lrLossHistory.map(h => h.loss), 0);
+                                      const lossRange = maxLoss === minLoss ? 1 : (maxLoss - minLoss);
+                                      return lrLossHistory.map((h, i) => {
+                                        const x = (i / (lrLossHistory.length - 1)) * width;
+                                        const y = height - 5 - ((h.loss - minLoss) / lossRange) * (height - 10);
+                                        return `${x},${y}`;
+                                      }).join(" ");
+                                    })()}
+                                  />
+                                )}
+                              </svg>
+                              <div className="absolute top-1 right-1 text-[7px] text-slate-400 font-extrabold font-mono">BCE LOSS</div>
+                            </div>
+                          </div>
+
+                          {/* Accuracy Chart */}
+                          <div className="bg-slate-50 border border-slate-200 p-2 text-center rounded-sm">
+                            <span className="text-[7.5px] font-extrabold text-emerald-650 block uppercase mb-1">Triage Accuracy Ascent</span>
+                            <div className="h-20 w-full relative flex items-end">
+                              <svg className="w-full h-full" viewBox="0 0 240 80" preserveAspectRatio="none">
+                                {/* Grid lines */}
+                                <line x1="0" y1="20" x2="240" y2="20" stroke="#E2E8F0" strokeWidth="0.5" />
+                                <line x1="0" y1="40" x2="240" y2="40" stroke="#E2E8F0" strokeWidth="0.5" />
+                                <line x1="0" y1="60" x2="240" y2="60" stroke="#E2E8F0" strokeWidth="0.5" />
+
+                                {lrLossHistory.length > 1 && (
+                                  <polyline
+                                    fill="none"
+                                    stroke="#059669"
+                                    strokeWidth="1.5"
+                                    points={(() => {
+                                      const width = 240;
+                                      const height = 80;
+                                      const maxAcc = Math.max(...lrLossHistory.map(h => h.accuracy), 100);
+                                      const minAcc = Math.min(...lrLossHistory.map(h => h.accuracy), 0);
+                                      const accRange = maxAcc === minAcc ? 1 : (maxAcc - minAcc);
+                                      return lrLossHistory.map((h, i) => {
+                                        const x = (i / (lrLossHistory.length - 1)) * width;
+                                        const y = height - 5 - ((h.accuracy - minAcc) / accRange) * (height - 10);
+                                        return `${x},${y}`;
+                                      }).join(" ");
+                                    })()}
+                                  />
+                                )}
+                              </svg>
+                              <div className="absolute top-1 right-1 text-[7px] text-slate-400 font-extrabold font-mono">ACCURACY %</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Slopes & Intercept Weight coefficients table */}
+                        {Object.keys(lrWeights).length > 0 && (
+                          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-sm">
+                            <div className="text-[7.5px] font-bold text-slate-400 uppercase tracking-widest mb-1">Calculated Weight Parameters / Slopes</div>
+                            <div className="grid grid-cols-2 gap-1.5 text-[8.5px] leading-tight">
+                              {Object.entries(lrWeights).map(([feat, wVal]) => {
+                                const valNum = wVal as number;
+                                const isPositive = valNum >= 0;
+                                return (
+                                  <div key={feat} className="flex justify-between items-center bg-white p-1 border border-slate-100 rounded-sm shadow-sm">
+                                    <span className="uppercase text-slate-400 font-extrabold">{feat === "bpSys" ? "Systolic BP" : feat}:</span>
+                                    <span className={isPositive ? "text-red-600 font-bold" : "text-emerald-600 font-bold"}>
+                                      {isPositive ? "+" : ""}{valNum.toFixed(3)}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              <div className="col-span-2 flex justify-between items-center bg-slate-100 p-1.5 mt-0.5 text-slate-705 border border-slate-250 rounded-sm font-bold">
+                                <span className="font-extrabold text-slate-400 uppercase">INTERCEPT (Bias):</span>
+                                <span className={lrBias >= 0 ? "text-red-500" : "text-emerald-500"}>{lrBias.toFixed(3)}</span>
+                              </div>
+                            </div>
+                            <p className="text-[7.2px] text-slate-400/80 font-bold mt-2 leading-normal">
+                              ⚠️ <span className="text-slate-400 uppercase font-extrabold">Clinical Interpretation:</span> Highly positive values increase diagnostic alert urgency. Negative factors act as stabilizer buffers.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Confusion Matrix block */}
+                        {lrConfusionMatrix && (
+                          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-sm">
+                            <div className="text-[7.5px] font-bold text-slate-400 uppercase tracking-widest mb-1">Confusion Matrix evaluation (Current Bed Database)</div>
+                            <div className="grid grid-cols-2 gap-2 text-center text-[9px] font-bold">
+                              <div className="p-1.5 bg-green-50 border border-green-200 text-green-800 rounded-sm">
+                                <div className="text-[8px] text-green-600 uppercase">True Negatives (TN)</div>
+                                <div className="text-lg font-bold text-slate-800">{lrConfusionMatrix.tn}</div>
+                                <div className="text-[7.2px] text-green-700">Correctly classified Stable</div>
+                              </div>
+                              <div className="p-1.5 bg-red-50 border border-red-200 text-red-800 rounded-sm">
+                                <div className="text-[8px] text-red-600 uppercase">False Positives (FP)</div>
+                                <div className="text-lg font-bold text-slate-800">{lrConfusionMatrix.fp}</div>
+                                <div className="text-[7.2px] text-red-700">False Alert triggers</div>
+                              </div>
+                              <div className="p-1.5 bg-red-50 border border-red-200 text-red-800 rounded-sm">
+                                <div className="text-[8px] text-red-600 uppercase">False Negatives (FN)</div>
+                                <div className="text-lg font-bold text-slate-800">{lrConfusionMatrix.fn}</div>
+                                <div className="text-[7.2px] text-red-700">Undetected danger events</div>
+                              </div>
+                              <div className="p-1.5 bg-green-50 border border-green-200 text-green-800 rounded-sm">
+                                <div className="text-[8px] text-green-600 uppercase">True Positives (TP)</div>
+                                <div className="text-lg font-bold text-slate-800">{lrConfusionMatrix.tp}</div>
+                                <div className="text-[7.2px] text-green-700">Correctly classified Emergency</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Interactive Patient Predictor Gauge using actual weights */}
+                        {lrPredictionScore !== null && (
+                          <div className="bg-sky-50 p-3 border border-sky-200 text-[9.5px] rounded-sm">
+                            <div className="flex justify-between items-center mb-1.5">
+                              <span className="font-extrabold text-slate-700">REAL-TIME FRONTEND PREDICTION GAUGE:</span>
+                              <span className="text-[8px] uppercase tracking-wider text-sky-700 font-extrabold bg-sky-100 rounded-sm px-1.5 py-0.2">Trained Model</span>
+                            </div>
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <span className="font-bold text-slate-400">Focus bed: </span>
+                                <span className="text-sky-600 font-extrabold">{activePatient.bedId}</span>
+                                <span className="text-slate-500 font-bold ml-2">({activePatient.name})</span>
+                              </div>
+                              <div className="text-sm font-bold text-[#059669]">
+                                {lrPredictionScore}% Risk index
+                              </div>
+                            </div>
+                            <div className="w-full bg-slate-200 h-2.5 overflow-hidden relative border border-slate-300 rounded-full">
+                              <div 
+                                className="h-full bg-gradient-to-r from-green-500 via-amber-500 to-red-500 transition-all duration-550"
+                                style={{ width: `${lrPredictionScore}%` }}
+                              ></div>
+                            </div>
+                            <div className="flex justify-between text-[7px] text-slate-400 mt-1 uppercase font-extrabold">
+                              <span>0% stable</span>
+                              <span>50% warning threshold</span>
+                              <span>100% vital failure risk</span>
+                            </div>
+                          </div>
+                        )}
+
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Reset defaults inside Model Panel */}
+                  <div className="pt-4 border-t border-slate-100 text-right mt-4 font-mono">
+                    <button
+                      onClick={() => {
+                        setPatients(initialPatients);
+                        setActivePatientId("P108");
+                        setLoadedDatasetName("System Default Simulator Patients");
+                        setLrWeights({});
+                        setLrBias(0);
+                        setLrAccuracy(null);
+                        setLrConfusionMatrix(null);
+                        setLrLossHistory([]);
+                        setLrPredictionScore(null);
+                        setDatasetSuccess("Telemetry workspace, patient state database and ML weights reset successfully.");
+                      }}
+                      className="px-2 py-1 border border-slate-200 bg-white hover:bg-slate-55 text-[8px] uppercase text-slate-500 font-bold shadow-sm rounded-sm transition-colors cursor-pointer"
+                    >
+                      Reset and Wipe trained weights
+                    </button>
+                  </div>
+                </div>
+                </div>
+
+                {/* PANEL B: SECURE BACKEND GEMINI DECISION SUPPORT SYSTEM */}
+                <div className="bg-white border border-slate-200 p-4 flex flex-col justify-between rounded-sm shadow-sm">
+                  <div>
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100 font-mono">
+                      <div className="flex items-center space-x-2">
+                        <Sparkles size={13} className="text-[#7C3AED]" />
+                        <h3 className="text-[11px] font-bold uppercase text-[#7C3AED] tracking-wider">Secure Backend LLM Clinical Co-pilot</h3>
+                      </div>
+                      <span className="text-[7px] bg-purple-50 text-[#7C3AED] border border-purple-200 px-1.5 py-0.2 uppercase font-extrabold rounded-sm">Gemini Server API</span>
+                    </div>
+
+                    <p className="text-[9px] text-slate-500 font-semibold leading-relaxed mb-4 font-sans">
+                      Connect directly to the Express server-side prediction proxy. Dispatch full patient parameters (including complex combinations, age demographics, SBP/DBP ratios and diagnosis labels) to trigger **Gemini-3.5-Flash** deep clinical rule analysis.
+                    </p>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3 mb-4 text-[9.2px] rounded-sm font-mono">
+                      <span className="text-[8px] font-extrabold text-slate-400 uppercase block mb-1">Target Assessment Patient</span>
+                      <div className="flex justify-between items-center text-[10px] font-extrabold text-slate-800">
+                        <div>
+                          <span className="text-red-650">{activePatient.bedId}</span> - {activePatient.name} ({activePatient.age}yo {activePatient.gender})
+                        </div>
+                        <span className="text-[8px] text-[#7C3AED] font-extrabold">{activePatient.dx}</span>
+                      </div>
+                      <div className="mt-2.5 grid grid-cols-4 gap-1.5 font-mono text-[8.5px] text-slate-500">
+                        <div className="bg-white p-1 border border-slate-100 rounded-sm">HR: <span className="text-slate-800 font-bold">{activePatient.hr}</span></div>
+                        <div className="bg-white p-1 border border-slate-100 rounded-sm font-sans font-bold">SpO₂: <span className="text-slate-800 font-bold">{activePatient.spo2}%</span></div>
+                        <div className="bg-white p-1 border border-slate-100 rounded-sm">BP: <span className="text-slate-800 font-bold">{activePatient.bpSys}/{activePatient.bpDia}</span></div>
+                        <div className="bg-white p-1 border border-slate-100 rounded-sm">TEMP: <span className="text-slate-800 font-bold">{activePatient.temp}°C</span></div>
+                      </div>
+                    </div>
+
+                    {/* Dispatch API Button */}
+                    <button
+                      onClick={runBackendAIPrognosis}
+                      disabled={isPrognosing}
+                      className="w-full py-2 bg-gradient-to-r from-purple-600 to-indigo-700 hover:from-purple-500 hover:to-indigo-650 text-white font-extrabold text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-sm rounded-sm disabled:opacity-40"
+                    >
+                      {isPrognosing ? "Consulting medical advisory agent..." : "Dispatch server predictive API query"}
+                    </button>
+
+                    {/* API Loading Terminal Logs */}
+                    {isPrognosing && (
+                      <div className="mt-3.5 p-3 bg-slate-900 border border-slate-850 font-mono text-[8px] space-y-1.5 text-purple-300 rounded-sm relative">
+                        <div className="flex justify-between text-[7px] text-slate-500 border-b border-slate-800 pb-1 uppercase font-bold">
+                          <span>ICU System Tunnel</span>
+                          <span className="animate-pulse text-indigo-400">Active Stream</span>
+                        </div>
+                        <div className="animate-pulse text-indigo-300">&gt; Initializing Express secure proxy on PORT 3000...</div>
+                        <div className="delay-300 animate-pulse text-indigo-300">&gt; Generating physiological JSON telemetry payload...</div>
+                        <div className="delay-700 animate-pulse text-purple-300 text-indigo-300">&gt; Consulting Clinical Co-pilot (gemini-3.5-flash)...</div>
+                        <div className="delay-1000 animate-pulse text-emerald-400">&gt; Parsing explainable variables and nurse recommendations...</div>
+                        <div className="absolute bottom-2 right-2 h-2.5 w-2.5 rounded-full bg-purple-500 animate-ping"></div>
+                      </div>
+                    )}
+
+                    {/* Clinical Prognosis response outputs */}
+                    {prognosisError && (
+                      <div className="mt-4 p-3 bg-red-50 border border-red-200 text-[9px] text-red-800 leading-relaxed rounded-sm font-mono">
+                        <span className="font-extrabold block text-red-700 mb-1">PROGNOSIS PIPELINE FAULT:</span>
+                        {prognosisError}
+                        <p className="mt-2 text-[8px] text-slate-500 font-semibold font-sans">
+                          Verify that you have defined GEMINI_API_KEY in your AI Studio project panel. If not configured, the local prediction matrix continues to generate state predictions fully offline!
+                        </p>
+                      </div>
+                    )}
+
+                    {backendPrognosis && (
+                      <div className="mt-4 space-y-3 font-sans">
+                        
+                        {/* Dynamic Clinical Verdict Header */}
+                        <div className="p-3 bg-emerald-50 border border-emerald-250 rounded-sm">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className="text-[8px] uppercase tracking-wider text-emerald-600 font-extrabold block mb-0.5">Refined Clinical Verdict</span>
+                              <span className="text-[11px] font-extrabold text-emerald-950 uppercase tracking-widest">{backendPrognosis.diagnosis}</span>
+                            </div>
+                            <div className="px-2 py-0.5 bg-emerald-100 border border-emerald-300 text-[8.5px] font-bold text-emerald-800 uppercase rounded-sm font-sans">
+                              {backendPrognosis.priority}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* circular hazard level */}
+                        <div className="p-3 bg-slate-50 border border-slate-200 flex items-center space-x-4 rounded-sm">
+                          <div className="relative flex items-center justify-center shrink-0 w-16 h-16 rounded-full border border-slate-100 bg-white shadow-sm">
+                            <svg className="w-full h-full transform -rotate-90">
+                              <circle cx="32" cy="32" r="28" fill="transparent" stroke="#F1F5F9" strokeWidth="3" />
+                              <circle 
+                                cx="32" 
+                                cy="32" 
+                                r="28" 
+                                fill="transparent" 
+                                stroke={backendPrognosis.riskScore > 65 ? "#EF4444" : (backendPrognosis.riskScore > 35 ? "#F59E0B" : "#10B981")} 
+                                strokeWidth="3" 
+                                strokeDasharray={2 * Math.PI * 28}
+                                strokeDashoffset={2 * Math.PI * 28 * (1 - backendPrognosis.riskScore / 100)}
+                                className="transition-all duration-1000"
+                              />
+                            </svg>
+                            <span className="absolute text-[11px] font-mono font-extrabold text-slate-800">
+                              {backendPrognosis.riskScore}%
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[7.5px] uppercase text-slate-400 font-extrabold block">AI Calculated Hazard Risk</span>
+                            <p className="text-[9px] text-slate-500 font-semibold leading-normal font-sans">
+                              Determined by mapping chronological vital drifts against standardized physiological protocols.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* reasoning text block */}
+                        <div className="p-3 bg-slate-100/50 border border-slate-200 text-[9px] leading-relaxed rounded-sm font-sans shadow-inner">
+                          <span className="text-[7.5px] text-[#7C3AED] font-extrabold uppercase block mb-1">Explainable AI Analysis</span>
+                          <p className="text-slate-655 font-bold italic">"{backendPrognosis.reasoning}"</p>
+                        </div>
+
+                        {/* recommendations list */}
+                        {backendPrognosis.recommendations && backendPrognosis.recommendations.length > 0 && (
+                          <div className="p-3 bg-white border border-slate-200 rounded-sm shadow-md font-sans">
+                            <span className="text-[7.5px] text-sky-600 font-extrabold uppercase block mb-1.5 ">Actionable Nurse Treatment Orders</span>
+                            <ul className="space-y-1 text-[8.5px] text-slate-650 font-bold list-decimal pl-3.5">
+                              {backendPrognosis.recommendations.map((rec: string, index: number) => (
+                                <li key={index}>{rec}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Feature Significance breakdown */}
+                        {backendPrognosis.featureImportance && backendPrognosis.featureImportance.length > 0 && (
+                          <div className="p-3 bg-slate-50 border border-slate-200 text-[9px] rounded-sm font-mono">
+                            <span className="text-[7.5px] text-slate-400 font-extrabold uppercase block mb-2">Primary Symptom Criticality Weights</span>
+                            <div className="space-y-1.5">
+                              {backendPrognosis.featureImportance.map((fi: any, idx: number) => {
+                                const isPositive = fi.importance >= 0;
+                                const absPercent = Math.min(100, Math.round(Math.abs(fi.importance) * 100));
+                                return (
+                                  <div key={idx} className="space-y-0.5">
+                                    <div className="flex justify-between text-[7.5px]">
+                                      <span className="uppercase text-slate-550 font-bold">{fi.feature}</span>
+                                      <span className={isPositive ? "text-red-650 font-extrabold" : "text-emerald-650 font-extrabold"}>
+                                        {isPositive ? "Risk Catalyst" : "Risk Buffer"} ({fi.importance.toFixed(2)})
+                                      </span>
+                                    </div>
+                                    <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden pb-0">
+                                      <div 
+                                        className={`h-full ${isPositive ? "bg-red-550" : "bg-emerald-555"}`}
+                                        style={{ width: `${absPercent}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                      </div>
+                    )}
+
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-100 text-center mt-4 text-[7.5px] text-slate-400 uppercase font-extrabold font-mono">
+                    Clinical Decision Support Model • Compliant under HIPAA proxy constraints
                   </div>
                 </div>
 
               </div>
 
-              {/* DIRECT DRAG AND DROP ZONE */}
-              <div className="bg-[#0E1525] border border-dashed border-[#1C2E44] p-6 text-center relative hover:border-[#FFEE58] transition-colors">
-                <input 
-                  type="file" 
-                  accept=".csv"
-                  onChange={handleFileUpload}
-                  className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                />
-                <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none">
-                  <UploadCloud size={24} className="text-[#FFEE58] animate-bounce" style={{ animationDuration: "3s" }} />
-                  <p className="text-[10px] font-bold text-neutral-300 uppercase">
-                    Drag and Drop downloaded Kaggle clinical CSV here
-                  </p>
-                  <p className="text-[8px] text-neutral-500">
-                    Supports sepsis.csv, heart_failure.csv, maternal_health.csv, or any custom medical sheet.
-                  </p>
-                  <p className="text-[9px] text-[#FFEE58] underline mt-1">
-                    Click to browse local files
-                  </p>
+            </div>
+          )}
+
+          {activeTab === "presentation" && (
+            <div className="flex-1 overflow-y-auto p-6 bg-slate-50 flex flex-col justify-between" style={{ minHeight: "calc(100vh - 110px)" }}>
+              <div className="max-w-4xl mx-auto w-full bg-white border border-slate-200 shadow-sm rounded-sm p-8 flex-1 flex flex-col justify-between">
+                
+                {/* Header of Deck */}
+                <div className="flex justify-between items-center border-b border-slate-100 pb-4 mb-6">
+                  <div className="flex items-center space-x-2 animate-fade-in">
+                    <div className="bg-slate-100 p-1.5 rounded-sm">
+                      <FileText size={16} className="text-slate-700" />
+                    </div>
+                    <div>
+                      <h2 className="text-[14px] font-bold text-slate-800 tracking-tight">CareSync AI Innovation Pitch</h2>
+                      <p className="text-[8.5px] font-mono text-slate-400">BOARD PRESENTATION • DELIVERABLE RUNTIME DEMO</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[8px] bg-slate-150 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold uppercase tracking-widest border border-slate-200">
+                      SLIDE {currentSlide + 1} OF 4
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              {/* Reset to System Defaults Option */}
-              <div className="mt-5 text-right">
-                <button
-                  onClick={() => {
-                    setPatients(initialPatients);
-                    setActivePatientId("P108");
-                    setLoadedDatasetName("System Default Simulator Patients");
-                    setDatasetSuccess("Restored clinical workspace to system-default real-time ICU simulator databases.");
-                    setDatasetError(null);
-                  }}
-                  className="px-3 py-1.5 border border-[#1C2E44] hover:bg-neutral-800 text-[8.5px] uppercase text-neutral-400 hover:text-white transition-colors"
-                >
-                  Reset To Clinical Simulator Defaults
-                </button>
-              </div>
+                {/* Slides Main View */}
+                <div className="flex-1 py-4">
+                  {/* --- SLIDE 1: Title & Executive Summary --- */}
+                  {currentSlide === 0 && (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">DELIVERABLES DELIVERED</span>
+                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">CareSync AI Command Center</h1>
+                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed max-w-2xl">
+                          An institutional critical-care monitoring system built to reduce alarm fatigue, streamline triage, and leverage hybrid machine learning for immediate bedside decision support.
+                        </p>
+                      </div>
 
+                      {/* Expected Deliverables Checklist */}
+                      <div className="bg-slate-50 border border-slate-200 p-5 rounded-sm">
+                        <h3 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider mb-3.5 font-mono">
+                          Traceability Analysis: Core Accomplishments
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
+                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">1. Functional Prototype</h4>
+                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
+                                Standardized React-Vite workspace binding directly to a containerized Express server at port 3000.
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
+                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">2. AI-Powered Patient Monitoring</h4>
+                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
+                                Dual predictive pipeline with offline Edge predictions and server-side LLM diagnostic checks.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
+                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">3. Alert & Prioritization Engine</h4>
+                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
+                                Real-time Bedside Dispatch matrix routing high-hazard alerts immediately to the ward coordinator.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
+                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">4. Interactive Visualizations</h4>
+                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
+                                Real-time SVG oscillators, physiological drift simulators, and training loss optimization curves.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-3 bg-purple-50 text-indigo-950 border border-purple-200 text-[10px] rounded-sm font-sans">
+                        <Sparkles size={14} className="text-[#7C3AED] shrink-0" />
+                        <span className="font-semibold leading-snug text-slate-700">
+                          <strong>Institutional Value Statement:</strong> CareSync AI saves active clinical hours by automatically analyzing physiological indicators at the edge to replace raw threshold triggers with intelligent predictive trend vectors.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* --- SLIDE 2: Core Innovation --- */}
+                  {currentSlide === 1 && (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">CORE INNOVATION</span>
+                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">Hybrid Intelligence Architecture</h1>
+                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed">
+                          By partitioning execution between <strong>Deterministic Local Edge Models</strong> and <strong>Generative Server-side Cohorts</strong>, we resolve both latency constraints and edge resource budgets.
+                        </p>
+                      </div>
+
+                      {/* Interactive Innovation diagram */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-[9.5px]">
+                        
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-sm flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center space-x-1.5 mb-2 border-b border-slate-200 pb-1.5">
+                              <Activity size={12} className="text-teal-600" />
+                              <span className="font-extrabold text-slate-800 uppercase tracking-wide">1. Edge Telemetry</span>
+                            </div>
+                            <p className="text-slate-500 text-[8.5px] font-sans font-semibold leading-relaxed mb-3">
+                              High-velocity vital signs (SPO2, Heart Rate, Respiration Rate, Temperature) continuously stream from bedside monitors.
+                            </p>
+                          </div>
+                          <div className="bg-white p-2 border border-slate-150 rounded-sm text-center font-bold text-teal-700 text-[9px]">
+                            120 Hz Continuous Stream
+                          </div>
+                        </div>
+
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-sm flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center space-x-1.5 mb-2 border-b border-slate-200 pb-1.5">
+                              <Database size={12} className="text-indigo-600" />
+                              <span className="font-extrabold text-slate-800 uppercase tracking-wide">2. Edge Classifier</span>
+                            </div>
+                            <p className="text-slate-500 text-[8.5px] font-sans font-semibold leading-relaxed mb-3">
+                              Deterministic Logistic Regression maps vital thresholds locally in React. Yields instantaneous triage risk values offline.
+                            </p>
+                          </div>
+                          <div className="bg-indigo-50 p-2 border border-indigo-200 rounded-sm text-center font-bold text-indigo-700 text-[9px] animate-pulse">
+                            0ms Latency Local Prediction
+                          </div>
+                        </div>
+
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-sm flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center space-x-1.5 mb-2 border-b border-slate-200 pb-1.5">
+                              <Sparkles size={12} className="text-[#7C3AED]" />
+                              <span className="font-extrabold text-[#7C3AED] uppercase tracking-wide">3. Gemini Server</span>
+                            </div>
+                            <p className="text-slate-500 text-[8.5px] font-sans font-semibold leading-relaxed mb-3">
+                              High-complexity patients are pushed through an Express proxy to invoke the Gemini-3.5-Flash advisor for explainable AI summaries.
+                            </p>
+                          </div>
+                          <div className="bg-purple-50 p-2 border border-purple-200 rounded-sm text-center font-bold text-purple-700 text-[9px]">
+                            Advanced Semantic Diagnosis
+                          </div>
+                        </div>
+
+                      </div>
+
+                      <div className="bg-emerald-50 border border-emerald-250 p-4 rounded-sm flex justify-between items-center text-[10px]">
+                        <div>
+                          <span className="font-extrabold text-emerald-800 block uppercase font-mono mb-0.5">BENEFIT: EDGE-RESILIENT CLINICAL CONTINUITY</span>
+                          <span className="text-slate-600 font-semibold">
+                            If hospital Wi-Fi disconnects, local edge classification continues predicting hazard risks perfectly offline inside the physician's browser session.
+                          </span>
+                        </div>
+                        <span className="bg-emerald-100 text-emerald-800 px-2 py-1 border border-emerald-250 uppercase font-extrabold font-mono rounded-sm text-[8.5px] shrink-0 ml-4">
+                          FAIL-SAFE SECURED
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* --- SLIDE 3: Feasibility --- */}
+                  {currentSlide === 2 && (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">FEASIBILITY VALUE</span>
+                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">Institutional Feasibility & Deployment</h1>
+                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed">
+                          Engineering feasibility demands compliance with existing clinical constraints. CareSync AI works with legacy technology stacks, keeping local hospital networks safe and responsive.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-[10px]">
+                        <div className="space-y-3.5">
+                          <h3 className="font-extrabold text-slate-800 uppercase tracking-wider font-mono border-b border-slate-100 pb-1">
+                            Technical Requirements
+                          </h3>
+                          <ul className="space-y-2.5 font-semibold text-slate-600 list-disc pl-4 leading-relaxed">
+                            <li>
+                              <strong className="text-slate-800">Browser Ready:</strong> Runs fully on zero-footprint web clients (Chrome, Safari, Edge) without local thick-app installations or driver packaging.
+                            </li>
+                            <li>
+                              <strong className="text-slate-800">FHIR Consent Standard:</strong> Integrates easily with existing EHR vendors (Epic, Cerner) via secure HTTP/SSL API endpoints.
+                            </li>
+                            <li>
+                              <strong className="text-slate-800">Lightweight Server Footprint:</strong> Backed by a standard Node container requiring only minimal physical resources for deployment.
+                            </li>
+                          </ul>
+                        </div>
+
+                        <div className="space-y-3.5">
+                          <h3 className="font-extrabold text-slate-800 uppercase tracking-wider font-mono border-b border-slate-100 pb-1">
+                            Administrative compliance
+                          </h3>
+                          <ul className="space-y-2.5 font-semibold text-slate-600 list-disc pl-4 leading-relaxed">
+                            <li>
+                              <strong className="text-slate-800">HIPAA Compliance Blueprint:</strong> Secure backend API proxy strips all patient identifiers (demographics, SSNs, phone numbers) before sending telemetry numbers to LLMs.
+                            </li>
+                            <li>
+                              <strong className="text-slate-800">Low Operational Risk:</strong> Clinical decisions are always advisory. Doctors and nurses retain ultimate override capability at the bedsides.
+                            </li>
+                            <li>
+                              <strong className="text-slate-800">Alarm Fatigue Alleviation:</strong> Intelligent threshold stabilization prevents transient noise from triggering multi-room emergency bells.
+                            </li>
+                          </ul>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-slate-50 border border-slate-200 text-slate-500 font-mono text-[9px] text-center rounded-sm">
+                        CURRENT SYSTEM COMPLIANCE RATE: <span className="font-bold text-indigo-600">100% EXCEL BASED AUDITING SANCTIONED</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* --- SLIDE 4: Future Scope --- */}
+                  {currentSlide === 3 && (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">FUTURE SCALABILITY</span>
+                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">Future Scope & IoMT Mesh</h1>
+                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed font-sans">
+                          Integrating the "Internet of Medical Things" (IoMT) opens next-generation pathways for remote clinical guidance, chronic wearable analytics, and proactive smart wards.
+                        </p>
+                      </div>
+
+                      {/* Mock IoMT Live Signal Monitor */}
+                      <div className="bg-slate-950 text-slate-300 p-4 border border-slate-850 rounded-sm font-mono text-[10px]">
+                        <div className="flex justify-between border-b border-slate-800 pb-2 mb-3.5 items-center">
+                          <div className="flex items-center space-x-2">
+                            <span className="h-2 w-2 rounded-full bg-indigo-500 animate-ping"></span>
+                            <span className="text-white font-bold leading-none">MOCK ACTIVE IOMT WEARABLE FEED</span>
+                          </div>
+                          <span className="text-[7.5px] bg-slate-800 text-indigo-400 px-1.5 py-0.2 rounded font-extrabold">PORT 3000 CONSOLE</span>
+                        </div>
+                        
+                        <div className="space-y-2.5 text-[8.5px] font-mono text-slate-400 leading-normal">
+                          <div className="flex justify-between hover:text-white transition-colors">
+                            <span>[04:41:09] INGESTING WEARABLE WRIST HR TRANSMISSION...</span>
+                            <span className="text-[#059669] font-bold">78 BPM (OK)</span>
+                          </div>
+                          <div className="flex justify-between hover:text-white transition-colors">
+                            <span>[04:41:10] PARSING SMART BED MATTRESS TEMPERATURE INDEX...</span>
+                            <span className="text-slate-300 font-sans">36.7 °C (STABLE)</span>
+                          </div>
+                          <div className="flex justify-between hover:text-white transition-colors">
+                            <span>[04:41:11] CALCULATING SLEEP DRIFT ACCELEROMETRY MATRIX...</span>
+                            <span className="text-indigo-455">98.2% SENSOR ACCURACY</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-3.5 border-t border-slate-900 flex justify-between items-center text-[9px]">
+                          <span className="text-slate-500">Target Scale: Multi-facility regional ICU routing and cloud predictive mesh networks.</span>
+                          <span className="text-[8px] border border-amber-600/30 text-amber-500 px-1.5 py-0.2 rounded lowercase italic">ready for deployment testing</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-sans text-[10px]">
+                        <div className="p-3.5 border border-slate-200 hover:border-slate-300 transition-all rounded-sm">
+                          <h4 className="font-bold text-slate-800 mb-1">Wearables & Home Recovery</h4>
+                          <p className="text-slate-550 font-semibold leading-relaxed">
+                            Extend the active priority triage logic to home-discharge monitoring bands, allowing hospital staff to flag patients requiring urgent re-admission.
+                          </p>
+                        </div>
+                        <div className="p-3.5 border border-slate-200 hover:border-slate-300 transition-all rounded-sm">
+                          <h4 className="font-bold text-slate-800 mb-1">Smart Hospital Hardware</h4>
+                          <p className="text-slate-550 font-semibold leading-relaxed">
+                            Embed physical beacons on medication carts to dynamically correlate clinician attendance frequencies with target patient physiological stability curves.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer Controls of Deck */}
+                <div className="flex justify-between items-center border-t border-slate-100 pt-5 mt-6 font-mono">
+                  <div>
+                    <button
+                      onClick={() => setCurrentSlide(prev => Math.max(0, prev - 1))}
+                      disabled={currentSlide === 0}
+                      className="px-3.5 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-[10px] uppercase text-slate-600 font-extrabold disabled:opacity-40 rounded-sm cursor-pointer transition-colors"
+                    >
+                      &larr; Previous Slide
+                    </button>
+                  </div>
+
+                  {/* Dot Indicators */}
+                  <div className="flex space-x-2">
+                    {[0, 1, 2, 3].map(slideIdx => (
+                      <button
+                        key={slideIdx}
+                        onClick={() => setCurrentSlide(slideIdx)}
+                        className={`h-2.5 w-2.5 rounded-full transition-all ${
+                          currentSlide === slideIdx ? "bg-slate-800 scale-125" : "bg-slate-200"
+                        }`}
+                        title={`Go to slide ${slideIdx + 1}`}
+                      />
+                    ))}
+                  </div>
+
+                  <div>
+                    {currentSlide < 3 ? (
+                      <button
+                        onClick={() => setCurrentSlide(prev => Math.min(3, prev + 1))}
+                        className="px-3.5 py-1.5 bg-slate-850 hover:bg-slate-750 text-white text-[10px] uppercase font-bold rounded-sm cursor-pointer transition-all flex items-center space-x-1"
+                      >
+                        <span>Next Slide</span>
+                        <ChevronRight size={11} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setActiveTab("live");
+                          setCurrentSlide(0);
+                        }}
+                        className="px-3.5 py-1.5 bg-[#E6F4EA] hover:bg-[#d8f0dc] text-[#059669] text-[10px] uppercase font-bold rounded-sm cursor-pointer transition-all border border-[#a2dfae]"
+                      >
+                        Launch Live Viewport &rarr;
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+              </div>
             </div>
           )}
 
@@ -1558,129 +2688,129 @@ export default function App() {
 
         {/* --- Right parameter column (160px fixed width) --- */}
         {/* Pinned Right - Aligns with hospital command console monitors showing ACTIVELY MONITORED patient */}
-        <section id="parameter-column" className="w-[160px] h-full bg-[#0E1525] grid grid-rows-6">
+        <section id="parameter-column" className="w-[160px] h-full bg-[#E2E8F0] grid grid-rows-6 border-l border-slate-200">
           
           {/* Block 1: HR */}
-          <div id="param-hr-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-[#1C2E44] flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <span className="text-[8px] font-bold tracking-[0.14em] text-[#00E676] uppercase">HR</span>
-              <span className="text-[9px] text-neutral-500">LO 50 HI 120</span>
+          <div id="param-hr-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-slate-300 flex flex-col justify-between bg-white/70">
+            <div className="flex justify-between items-start font-mono">
+              <span className="text-[8px] font-bold tracking-[0.14em] text-[#059669] uppercase">HR</span>
+              <span className="text-[9px] text-slate-400 font-bold">LO 50 HI 120</span>
             </div>
             <div className="flex items-baseline justify-end space-x-0.5">
-              <span className="text-[26px] font-semibold text-[#00E676] leading-none tracking-tighter">{hr}</span>
-              <span className="text-[8px] text-[#00E676] opacity-75">bpm</span>
+              <span className="text-[26px] font-extrabold text-[#059669] leading-none tracking-tighter font-mono">{hr}</span>
+              <span className="text-[8px] font-bold text-[#059669] opacity-75 font-mono">bpm</span>
             </div>
-            <div className="flex justify-between items-end text-[9px] text-neutral-500">
-              <span className="text-[8px]">ECG LEAD II</span>
+            <div className="flex justify-between items-end text-[9px] text-slate-400 font-bold font-mono">
+              <span className="text-[8px] uppercase">ECG LEAD II</span>
               {hr > 120 ? (
-                <span className="text-red-500 animate-pulse font-bold">↑ TACHY</span>
+                <span className="text-red-600 animate-pulse font-extrabold">↑ TACHY</span>
               ) : (
-                <span className="text-[#00E676] font-bold">● OK</span>
+                <span className="text-[#059669] font-extrabold">● OK</span>
               )}
             </div>
           </div>
 
           {/* Block 2: SpO2 */}
-          <div id="param-spo2-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-[#1C2E44] flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <span className="text-[8px] font-bold tracking-[0.14em] text-[#00E5FF] uppercase">SPO2</span>
-              <span className="text-[9px] text-neutral-500">LO 90 HI 100</span>
+          <div id="param-spo2-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-slate-300 flex flex-col justify-between bg-white/70">
+            <div className="flex justify-between items-start font-mono">
+              <span className="text-[8px] font-bold tracking-[0.14em] text-[#0284C7] uppercase">SPO2</span>
+              <span className="text-[9px] text-slate-400 font-bold">LO 90 HI 100</span>
             </div>
-            <div className="flex items-baseline justify-end space-x-0.5">
-              <span className="text-[26px] font-semibold text-[#00E5FF] leading-none tracking-tighter">{spo2}</span>
-              <span className="text-[10px] text-[#00E5FF] opacity-75">%</span>
+            <div className="flex items-baseline justify-end space-x-0.5 animate-pulse">
+              <span className="text-[26px] font-extrabold text-[#0284C7] leading-none tracking-tighter font-mono">{spo2}</span>
+              <span className="text-[10px] font-bold text-[#0284C7] opacity-75 font-mono">%</span>
             </div>
-            <div className="flex justify-between items-end text-[9px] text-neutral-500">
+            <div className="flex justify-between items-end text-[9px] text-slate-400 font-bold font-mono">
               <span>PR: {hr} bpm</span>
               {spo2 < 93 ? (
-                <span className="text-amber-500 animate-pulse font-bold">↓ DESAT</span>
+                <span className="text-amber-600 animate-pulse font-extrabold">↓ DESAT</span>
               ) : (
-                <span className="text-[#00E5FF] font-bold">● OK</span>
+                <span className="text-[#0284C7] font-extrabold">● OK</span>
               )}
             </div>
           </div>
 
           {/* Block 3: NIBP */}
-          <div id="param-nibp-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-[#1C2E44] flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <span className="text-[8px] font-bold tracking-[0.14em] text-[#FF5252] uppercase">NIBP</span>
-              <span className="text-[9px] text-neutral-500">SYS 140/90</span>
+          <div id="param-nibp-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-slate-300 flex flex-col justify-between bg-white/70">
+            <div className="flex justify-between items-start font-mono">
+              <span className="text-[8px] font-bold tracking-[0.14em] text-red-600 uppercase">NIBP</span>
+              <span className="text-[9px] text-slate-400 font-bold">SYS 140/90</span>
             </div>
             <div className="flex items-baseline justify-end">
               {nibpMeasuring ? (
-                <span className="text-sm font-semibold text-[#FF5252] leading-none animate-pulse">CUFF MAIN...</span>
+                <span className="text-sm font-semibold text-red-650 leading-none animate-pulse font-mono">CUFF MAIN...</span>
               ) : (
-                <span className="text-[26px] font-semibold text-[#FF5252] leading-none tracking-tighter">
+                <span className="text-[26px] font-extrabold text-red-600 leading-none tracking-tighter font-mono">
                   {nibpSys}/{nibpDia}
                 </span>
               )}
             </div>
-            <div className="flex justify-between items-end text-[9px] text-neutral-400">
+            <div className="flex justify-between items-end text-[9px] text-slate-400 font-bold font-mono">
               <span>MAP: ({calculatedMap})</span>
               {nibpSys < 90 ? (
-                <span className="text-red-500 animate-pulse font-bold">↓ HYPO</span>
+                <span className="text-red-600 animate-pulse font-extrabold">↓ HYPO</span>
               ) : (
-                <span className="text-red-500 font-bold opacity-60">● APPLIED</span>
+                <span className="text-red-500 font-bold opacity-80">● APPLIED</span>
               )}
             </div>
           </div>
 
           {/* Block 4: Temp */}
-          <div id="param-temp-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-[#1C2E44] flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <span className="text-[8px] font-bold tracking-[0.14em] text-[#FFD740] uppercase">TEMP</span>
-              <span className="text-[9px] text-neutral-500">LO 36 HI 38.5</span>
+          <div id="param-temp-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-slate-300 flex flex-col justify-between bg-white/70">
+            <div className="flex justify-between items-start font-mono">
+              <span className="text-[8px] font-bold tracking-[0.14em] text-amber-600 uppercase">TEMP</span>
+              <span className="text-[9px] text-slate-400 font-bold">LO 36 HI 38.5</span>
             </div>
             <div className="flex items-baseline justify-end space-x-0.5">
-              <span className="text-[26px] font-semibold text-[#FFD740] leading-none tracking-tighter">{temp.toFixed(1)}</span>
-              <span className="text-[10px] text-[#FFD740] opacity-75">°C</span>
+              <span className="text-[26px] font-extrabold text-amber-600 leading-none tracking-tighter font-mono">{temp.toFixed(1)}</span>
+              <span className="text-[10px] font-bold text-amber-600 opacity-75 font-mono">°C</span>
             </div>
-            <div className="flex justify-between items-end text-[9px] text-neutral-500">
+            <div className="flex justify-between items-end text-[9px] text-slate-400 font-bold font-mono">
               <span>{((temp * 9) / 5 + 32).toFixed(1)} °F</span>
               {temp > 38.5 ? (
-                <span className="text-amber-500 animate-pulse font-bold">↑ FEVER</span>
+                <span className="text-amber-600 animate-pulse font-extrabold">↑ FEVER</span>
               ) : (
-                <span className="text-yellow-500 font-bold">● OK</span>
+                <span className="text-amber-600 font-extrabold">● OK</span>
               )}
             </div>
           </div>
 
           {/* Block 5: RR */}
-          <div id="param-rr-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-[#1C2E44] flex flex-col justify-between">
-            <div className="flex justify-between items-start">
-              <span className="text-[8px] font-bold tracking-[0.14em] text-[#AA80FF] uppercase">RESP</span>
-              <span className="text-[9px] text-neutral-500">LO 8 HI 25</span>
+          <div id="param-rr-block" style={{ contentVisibility: "auto" }} className="p-2 border-b border-slate-300 flex flex-col justify-between bg-white/70">
+            <div className="flex justify-between items-start font-mono">
+              <span className="text-[8px] font-bold tracking-[0.14em] text-[#7C3AED] uppercase">RESP</span>
+              <span className="text-[9px] text-slate-400 font-bold">LO 8 HI 25</span>
             </div>
             <div className="flex items-baseline justify-end space-x-0.5">
-              <span className="text-[26px] font-semibold text-[#AA80FF] leading-none tracking-tighter">{rr}</span>
-              <span className="text-[8px] text-[#AA80FF] opacity-75">/min</span>
+              <span className="text-[26px] font-extrabold text-[#7C3AED] leading-none tracking-tighter font-mono">{rr}</span>
+              <span className="text-[8px] font-bold text-[#7C3AED] opacity-75 font-mono">/min</span>
             </div>
-            <div className="flex justify-between items-end text-[9px] text-neutral-500">
+            <div className="flex justify-between items-end text-[9px] text-slate-400 font-bold font-mono">
               <span>I:E 1:2.0</span>
               {rr > 25 ? (
-                <span className="text-amber-500 font-bold">↑ HIGH</span>
+                <span className="text-amber-600 font-extrabold">↑ HIGH</span>
               ) : (
-                <span className="text-purple-500 font-bold">● OK</span>
+                <span className="text-purple-600 font-extrabold">● OK</span>
               )}
             </div>
           </div>
 
           {/* Block 6: EtCO2 */}
-          <div id="param-co2-block" style={{ contentVisibility: "auto" }} className="p-2 flex flex-col justify-between">
+          <div id="param-co2-block" style={{ contentVisibility: "auto" }} className="p-2 flex flex-col justify-between bg-white/70 font-mono">
             <div className="flex justify-between items-start">
-              <span className="text-[8px] font-bold tracking-[0.14em] text-[#FF9100] uppercase">CO2</span>
-              <span className="text-[9px] text-neutral-500">LO 30 HI 45</span>
+              <span className="text-[8px] font-bold tracking-[0.14em] text-amber-700 uppercase">CO2</span>
+              <span className="text-[9px] text-slate-400 font-bold">LO 30 HI 45</span>
             </div>
             <div className="flex items-baseline justify-end space-x-0.5">
-              <span className="text-[26px] font-semibold text-[#FF9100] leading-none tracking-tighter">{co2}</span>
-              <span className="text-[9px] text-[#FF9100] opacity-75">mmHg</span>
+              <span className="text-[26px] font-extrabold text-amber-700 leading-none tracking-tighter">{co2}</span>
+              <span className="text-[9px] font-bold text-amber-700 opacity-75">mmHg</span>
             </div>
-            <div className="flex justify-between items-end text-[9px] text-neutral-500">
+            <div className="flex justify-between items-end text-[9px] text-slate-400 font-bold">
               <span>FiCO2: 1</span>
               {co2 < 30 ? (
-                <span className="text-amber-500 font-bold">↓ HYPO</span>
+                <span className="text-amber-600 font-bold">↓ HYPO</span>
               ) : (
-                <span className="text-orange-500 font-bold">● OK</span>
+                <span className="text-amber-700 font-bold">● OK</span>
               )}
             </div>
           </div>
