@@ -20,6 +20,7 @@ import {
   AlertCircle,
   ExternalLink
 } from "lucide-react";
+import { PatientCompanion } from "./components/PatientCompanion";
 import { Patient, getPatientMetrics, getExplainableAIReason } from "./types";
 import { initialPatients } from "./data";
 
@@ -340,7 +341,7 @@ export default function App() {
   const [activePatientId, setActivePatientId] = useState<string>("P108"); // starts with Jenkins, Sarah (ICU-08)
 
   // --- Navigation Tabs ---
-  const [activeTab, setActiveTab] = useState<"live" | "table" | "command" | "kaggle" | "presentation" | "escalation" | "ecosystem">("live");
+  const [activeTab, setActiveTab] = useState<"live" | "table" | "command" | "kaggle" | "escalation" | "ecosystem">("live");
 
   // --- Wearable & Future Ecosystem Simulation States ---
   const [wearableVitals, setWearableVitals] = useState({
@@ -358,6 +359,267 @@ export default function App() {
   const [voiceNurseQuery, setVoiceNurseQuery] = useState<string>("");
   const [voiceNurseAnswer, setVoiceNurseAnswer] = useState<string>("Select an oracle prompt above or ask a clinical question to activate the Voice AI Nurse.");
   const [voiceNurseIsTyping, setVoiceNurseIsTyping] = useState<boolean>(false);
+
+  // --- Post-Discharge Patient Care & Medication Companion States ---
+  const [companionSubTab, setCompanionSubTab] = useState<"hospital" | "patient">("patient");
+  const [selectedCompanionMed, setSelectedCompanionMed] = useState<"Metformin" | "Aspirin" | "Atorvastatin">("Metformin");
+  const [preferredCompLanguage, setPreferredCompLanguage] = useState<"Tamil" | "English" | "Hindi" | "Telugu" | "Malayalam">("Tamil");
+  const [companionExplanation, setCompanionExplanation] = useState<string>("சுசன் அம்மா, காலை 8 மணி ஆகிவிட்டது. வெள்ளை நிற வட்ட மாத்திரையான மெட்ஃபார்மினை காலை உணவுக்குப் பிறகு எடுத்துக்கொள்ளுங்கள். இது உங்கள் சர்க்கரை நோயை கட்டுப்படுத்த உதவும்.");
+  const [companionExplIsLoading, setCompanionExplIsLoading] = useState<boolean>(false);
+  const [companionAudioPlaying, setCompanionAudioPlaying] = useState<boolean>(false);
+  
+  // Pill Identification States
+  const [scannedPillResult, setScannedPillResult] = useState<{
+    medicine: string;
+    color: string;
+    shape: string;
+    dosage: string;
+    purpose: string;
+    food: string;
+  } | null>(null);
+  const [pillScannerLoading, setPillScannerLoading] = useState<boolean>(false);
+  const [presetPillChoice, setPresetPillChoice] = useState<"white_round" | "red_capsule" | "yellow_hex" | "blue_oval">("white_round");
+
+  // Patient Chat Q&A States
+  const [patientUserMessage, setPatientUserMessage] = useState<string>("");
+  const [patientChatHistory, setPatientChatHistory] = useState<Array<{ sender: "patient" | "system"; text: string }>>([
+    { sender: "system", text: "Hello Susan, I am your CareSync AI Companion. You can ask me any question about your medications or health routines! (e.g., 'Can I take my pills with hot coffee?')" }
+  ]);
+  const [patientChatLoading, setPatientChatLoading] = useState<boolean>(false);
+
+  // Medication Scheduled Alerts & Adherence Metrics
+  const [scheduledReminders, setScheduledReminders] = useState<Array<{
+    id: string;
+    medicine: string;
+    time: string;
+    food: string;
+    status: "taken" | "skipped" | "missed" | "pending";
+    timeTaken?: string;
+  }>>([
+    { id: "1", medicine: "Metformin", time: "8:00 AM", food: "After breakfast", status: "taken", timeTaken: "8:02 AM" },
+    { id: "2", medicine: "Aspirin", time: "2:00 PM", food: "Before lunch", status: "missed" },
+    { id: "3", medicine: "Atorvastatin", time: "9:00 PM", food: "After dinner", status: "pending" }
+  ]);
+
+  const [missedAlarmsLogs, setMissedAlarmsLogs] = useState<string[]>([
+    "[08:00 AM] 🔔 Reminder: Metformin checklist sent to Susan White.",
+    "[08:02 AM] ✅ Susan confirmed: Metformin taken successfully.",
+    "[02:00 PM] 🔔 Reminder: Aspirin checklist sent to Susan White.",
+    "[02:15 PM] ⚠️ Warning: Aspirin medication not confirmed by Susan within 15 mins.",
+    "[02:30 PM] 📱 Escalation Level 1: Daughter (Sarah White) dispatched SMS alert for missed/skipped Aspirin.",
+    "[04:00 PM] ⚕️ Escalation Level 2: Caregiver and Dr. David's dashboard updated with Aspirin adherence failure."
+  ]);
+
+  const [dailyAdherence, setDailyAdherence] = useState<{ [key: string]: "taken" | "missed" | "pending" }>({
+    "Monday": "taken",
+    "Tuesday": "taken",
+    "Wednesday": "missed",
+    "Thursday": "taken",
+    "Friday": "taken",
+    "Saturday": "taken",
+    "Sunday": "pending"
+  });
+
+  const speakText = (text: string, lang: string) => {
+    if (!window.speechSynthesis) return;
+    
+    // Stop any existing speech
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Map language code to standard voices for high quality
+    const langCodes: Record<string, string> = {
+      Tamil: "ta-IN",
+      English: "en-US",
+      Hindi: "hi-IN",
+      Telugu: "te-IN",
+      Malayalam: "ml-IN"
+    };
+    utterance.lang = langCodes[lang] || "en-US";
+    
+    // Attempt to select corresponding native language voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const targetedVoice = voices.find(v => v.lang.startsWith(langCodes[lang] || "en"));
+    if (targetedVoice) {
+      utterance.voice = targetedVoice;
+    }
+    
+    utterance.onstart = () => {
+      setCompanionAudioPlaying(true);
+    };
+    utterance.onend = () => {
+      setCompanionAudioPlaying(false);
+    };
+    utterance.onerror = () => {
+      setCompanionAudioPlaying(false);
+    };
+    
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const fetchAndSpeakExplanation = async (med: string, lang: string) => {
+    setCompanionExplIsLoading(true);
+    setCompanionAudioPlaying(false);
+    try {
+      const response = await fetch("/api/explain-med", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ medicine: med, language: lang, age: 68 })
+      });
+      const data = await response.json();
+      if (data.success && data.text) {
+        setCompanionExplanation(data.text);
+        speakText(data.text, lang);
+      } else {
+        throw new Error(data.error || "Cannot get translation");
+      }
+    } catch (err) {
+      console.error(err);
+      // Fallback statically if server is offline or fails
+      const fallbackExplanations: Record<string, Record<string, string>> = {
+        Metformin: {
+          Tamil: "சுசன் அம்மா, காலை 8 மணி ஆகிவிட்டது. வெள்ளை நிற வட்ட மாத்திரையான மெட்ஃபார்மினை காலை உணவுக்குப் பிறகு எடுத்துக்கொள்ளுங்கள். இது உங்கள் சர்க்கரை நோயை கட்டுப்படுத்த உதவும்.",
+          English: "Susan, it is 8 AM. Please take your white round tablet, Metformin. This medicine helps control your blood sugar. Take it after breakfast.",
+          Hindi: "सुसान जी, कृपया नाश्ते के बाद अपनी मेटफॉर्मिन दवा लें। यह आपके ब्लड शुगर को नियंत्रित करने में मदद करेगी।",
+          Telugu: "సుసాన్ గారు, దయచేసి అల్పాహారం తర్వాత మీ మెట్‌ఫార్మిన్ టాబ్లెట్ తీసుకోండి. ఇది రక్తంలో చక్కెరను నియంత్రిస్తుంది.",
+          Malayalam: "സുസൻ, ദയവായി പ്രഭാതഭക്ഷണത്തിന് ശേഷം മെറ്റ്ഫോർമിൻ കഴിക്കുക. ഇത് നിങ്ങളുടെ രക്തത്തിലെ പഞ്ചസാരയുടെ അളവ് നിയന്ത്രിക്കാൻ സഹായിക്കും."
+        },
+        Aspirin: {
+          Tamil: "சுசன் அம்மா, மதியம் 2 மணி ஆயிற்று. ஆஸ்பிரின் மாத்திரையை மதிய உணவுக்கு முன் எடுத்துக்கொள்ளுங்கள். இது உங்கள் இரத்த ஓட்டத்தை சீராக்க உதவும்.",
+          English: "Susan, it is 2 PM. Please take your Aspirin tablet before lunch. This medicine helps maintain smooth blood circulation.",
+          Hindi: "सुसान जी, दोपहर 2 बजे हो चुके हैं। कृपया भोजन से पहले एस्पिरिन लें। यह रक्त परिसंचरण को ठीक रखता है।",
+          Telugu: "సుసాన్ గారు, మధ్యాహ్నం 2 గంటలయింది. భోజనానికి ముందు ఆస్పిరిన్ తీసుకోండి. ఇది రక్త ప్రసరణను పెంచుతుంది.",
+          Malayalam: "സുസൻ, ഉച്ചയ്ക്ക് 2 മണിയായി. ഉച്ചഭക്ഷണത്തിന് മുൻപ് ആസ്പിരിൻ ഗുളിക കഴിക്കുക."
+        },
+        Atorvastatin: {
+          Tamil: "சுசன் அம்மா, இரவு 9 மணி ஆயிற்று. அடோர்வாஸ்டாடின் மாத்திரையை இரவு உணவிற்குப் பிறகு எடுத்துக்கொள்ளுங்கள். இது உங்கள் கொழுப்பைக் குறைக்க உதவும்.",
+          English: "Susan, it is 9 PM. Please take your Atorvastatin tablet after dinner. This medicine helps lower cardial cholesterol levels.",
+          Hindi: "सुसान जी, रात 9 बजे हो चुके हैं। कृपया रात के भोजन के बाद एटोरवास्टेटिन लें। यह कोलेस्ट्रॉल कम करता है।",
+          Telugu: "సుసాన్ గారు, రాత్రి 9 గంటలయింది. భోజనం తర్వాత అటోర్వాస్టాటిన్ తీసుకోండి. ఇది కొలెస్ట్రాల్‌ను తగ్గిస్తుంది.",
+          Malayalam: "സുസൻ, രാത്രി 9 മണിയായി. അത്താഴത്തിന് ശേഷം അറ്റോർവാസ്റ്റാറ്റിൻ ഗുളിക കഴിക്കുക."
+        }
+      };
+      
+      const medFallbacks = fallbackExplanations[med as "Metformin" | "Aspirin" | "Atorvastatin"] || fallbackExplanations["Metformin"];
+      const text = medFallbacks[lang] || medFallbacks["English"];
+      setCompanionExplanation(text);
+      speakText(text, lang);
+    } finally {
+      setCompanionExplIsLoading(false);
+    }
+  };
+
+  const handleScanPill = async () => {
+    setPillScannerLoading(true);
+    setScannedPillResult(null);
+    try {
+      const presets: Record<string, string> = {
+        white_round: "I am showing a white round tablet. Detail name, shape, standard strength, and dosage.",
+        red_capsule: "I am showing a red capsule pharmaceutical pill. Detail name, color, purpose, and dietary guidelines.",
+        yellow_hex: "I have a yellow hexagonal tablet. Is it Atorvastatin 20mg? Detail cholesterol benefits and dinner requirements.",
+        blue_oval: "I am holding a blue oval tablet. Please analyze."
+      };
+      
+      const query = presets[presetPillChoice] || "Identify this medicine tablet.";
+      
+      const res = await fetch("/api/identify-pill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ textQuery: query })
+      });
+      const responseData = await res.json();
+      if (responseData.success && responseData.data) {
+        setScannedPillResult(responseData.data);
+      } else {
+        throw new Error("No success result from image scan");
+      }
+    } catch (err) {
+      console.error(err);
+      // Fallback
+      const fallbacks: Record<string, any> = {
+        white_round: {
+          medicine: "Metformin 500mg",
+          color: "White",
+          shape: "Round",
+          dosage: "One tablet",
+          purpose: "Controls blood glucose level and enhances insulin response.",
+          food: "Take after breakfast with cup of water."
+        },
+        red_capsule: {
+          medicine: "Aspirin 75mg Low-Dose",
+          color: "Red",
+          shape: "Capsule/Oval",
+          dosage: "One tablet",
+          purpose: "Thin blood and prevent cardiovascular clots or heart stroke.",
+          food: "Take before meal with warm water."
+        },
+        yellow_hex: {
+          medicine: "Atorvastatin 20mg (Lower Lipids)",
+          color: "Yellow",
+          shape: "Hexagonal",
+          dosage: "One tablet",
+          purpose: "Reduces cholesterol / lipid synthesis inside clinical studies.",
+          food: "Take after dinner before going to bed."
+        },
+        blue_oval: {
+          medicine: "Metoprolol 50mg (Beta-Blocker)",
+          color: "Blue",
+          shape: "Oval",
+          dosage: "Half tablet",
+          purpose: "Maintains optimal heart beat and drops severe hypertension.",
+          food: "Take with breakfast meal daily."
+        }
+      };
+      setScannedPillResult(fallbacks[presetPillChoice]);
+    } finally {
+      setPillScannerLoading(false);
+    }
+  };
+
+  const handleSendPatientMessage = async () => {
+    if (!patientUserMessage.trim()) return;
+    const msg = patientUserMessage;
+    setPatientChatHistory(prev => [...prev, { sender: "patient", text: msg }]);
+    setPatientUserMessage("");
+    setPatientChatLoading(true);
+
+    try {
+      const response = await fetch("/api/patient-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: msg,
+          language: preferredCompLanguage,
+          age: 68,
+          selectedMed: selectedCompanionMed
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.text) {
+        setPatientChatHistory(prev => [...prev, { sender: "system", text: data.text }]);
+      } else {
+        throw new Error("Failed patient chat answer");
+      }
+    } catch (err) {
+      console.error(err);
+      // Simple fallback Q&A logic matching common topics
+      let replyText = "";
+      if (msg.toLowerCase().includes("coffee") || msg.toLowerCase().includes("milk") || msg.toLowerCase().includes("tea")) {
+        replyText = "Dearest Susan, it is highly recommended to take your Metformin or Aspirin only with clean, room-temperature water. Drinks like coffee, hot tea, or sweet juices can alter how fast the pill dissolves and may elevate your stomach acidity. Please drink a full glass of water instead!";
+      } else if (msg.toLowerCase().includes("what does") || msg.toLowerCase().includes("purpose") || msg.toLowerCase().includes("do")) {
+        replyText = `Your prescribed ${selectedCompanionMed} is critical for your recovery. It works to stabilize your systemic indicators like blood glucose or cardial circulation. Please verify with Dr. David if you need more custom dosage guidance!`;
+      } else if (msg.toLowerCase().includes("forget") || msg.toLowerCase().includes("miss")) {
+        replyText = "Do not worry! If you miss a dose by less than 2 hours, please take it immediately. However, if it is almost time for your afternoon or evening pill, skip the missed round completely and resume your normal pattern. Never take double doses.";
+      } else {
+        replyText = `Susan White, I am tracking your active home recovery on your wearable watch. Taking your ${selectedCompanionMed} regularly is helping your heart parameters stay completely stable. Please contact Sarah or Dr. David immediately if you experience dizziness or fatigue!`;
+      }
+      setPatientChatHistory(prev => [...prev, { sender: "system", text: replyText }]);
+    } finally {
+      setPatientChatLoading(false);
+    }
+  };
+
   const [digitalTwinOptions, setDigitalTwinOptions] = useState({
     oxygen: false,
     antibiotics: false,
@@ -647,7 +909,6 @@ export default function App() {
   const [datasetError, setDatasetError] = useState<string | null>(null);
   const [datasetSuccess, setDatasetSuccess] = useState<string | null>(null);
   const [isLabbing, setIsLabbing] = useState(false);
-  const [currentSlide, setCurrentSlide] = useState(0);
   const [isVitalsOpen, setIsVitalsOpen] = useState(false);
 
   const loadAndInjectDataset = async (datasetKey: "sepsis" | "heart" | "maternal", filename: string) => {
@@ -1603,19 +1864,7 @@ export default function App() {
             >
               🌐 IoMT Ecosystem
             </button>
-            <button
-              onClick={() => {
-                setActiveTab("presentation");
-                setCurrentSlide(0);
-              }}
-              className={`px-2 sm:px-3 text-[9px] sm:text-[9.5px] shrink-0 font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
-                activeTab === "presentation"
-                  ? "bg-slate-100 text-slate-800 border-b-2 border-slate-600 font-extrabold"
-                  : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-              }`}
-            >
-              Innovation Deck
-            </button>
+
           </div>
 
           <div className="border-l border-slate-200 pl-4 hidden md:flex items-center space-x-1 shrink-0">
@@ -3187,340 +3436,6 @@ export default function App() {
                 </div>
 
               </div>
-
-            </div>
-          )}
-
-          {activeTab === "presentation" && (
-            <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-slate-50 flex flex-col justify-between" style={{ minHeight: "calc(100vh - 110px)" }}>
-              <div className="max-w-4xl mx-auto w-full bg-white border border-slate-200 shadow-sm rounded-sm p-4 sm:p-8 flex-1 flex flex-col justify-between">
-                
-                {/* Header of Deck */}
-                <div className="flex justify-between items-center border-b border-slate-100 pb-4 mb-6">
-                  <div className="flex items-center space-x-2 animate-fade-in">
-                    <div className="bg-slate-100 p-1.5 rounded-sm">
-                      <FileText size={16} className="text-slate-700" />
-                    </div>
-                    <div>
-                      <h2 className="text-[14px] font-bold text-slate-800 tracking-tight">CareSync AI Innovation Pitch</h2>
-                      <p className="text-[8.5px] font-mono text-slate-400">BOARD PRESENTATION • DELIVERABLE RUNTIME DEMO</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[8px] bg-slate-150 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold uppercase tracking-widest border border-slate-200">
-                      SLIDE {currentSlide + 1} OF 4
-                    </span>
-                  </div>
-                </div>
-
-                {/* Slides Main View */}
-                <div className="flex-1 py-4">
-                  {/* --- SLIDE 1: Title & Executive Summary --- */}
-                  {currentSlide === 0 && (
-                    <div className="space-y-6">
-                      <div className="space-y-2">
-                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">DELIVERABLES DELIVERED</span>
-                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">CareSync AI Command Center</h1>
-                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed max-w-2xl">
-                          An institutional critical-care monitoring system built to reduce alarm fatigue, streamline triage, and leverage hybrid machine learning for immediate bedside decision support.
-                        </p>
-                      </div>
-
-                      {/* Expected Deliverables Checklist */}
-                      <div className="bg-slate-50 border border-slate-200 p-5 rounded-sm">
-                        <h3 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wider mb-3.5 font-mono">
-                          Traceability Analysis: Core Accomplishments
-                        </h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
-                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
-                            <div>
-                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">1. Functional Prototype</h4>
-                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
-                                Standardized React-Vite workspace binding directly to a containerized Express server at port 3000.
-                              </p>
-                            </div>
-                          </div>
-                          
-                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
-                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
-                            <div>
-                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">2. AI-Powered Patient Monitoring</h4>
-                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
-                                Dual predictive pipeline with offline Edge predictions and server-side LLM diagnostic checks.
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
-                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
-                            <div>
-                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">3. Alert & Prioritization Engine</h4>
-                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
-                                Real-time Bedside Dispatch matrix routing high-hazard alerts immediately to the ward coordinator.
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-start space-x-3 bg-white p-3 border border-slate-155 rounded-sm">
-                            <CheckCircle size={16} className="text-green-600 shrink-0 mt-0.5" />
-                            <div>
-                              <h4 className="text-[10.5px] font-bold text-slate-800 leading-snug">4. Interactive Visualizations</h4>
-                              <p className="text-[9px] text-slate-500 font-semibold leading-normal">
-                                Real-time SVG oscillators, physiological drift simulators, and training loss optimization curves.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center space-x-2.5 p-3 bg-purple-50 text-indigo-950 border border-purple-200 text-[10px] rounded-sm font-sans">
-                        <Sparkles size={14} className="text-[#7C3AED] shrink-0" />
-                        <span className="font-semibold leading-snug text-slate-700">
-                          <strong>Institutional Value Statement:</strong> CareSync AI saves active clinical hours by automatically analyzing physiological indicators at the edge to replace raw threshold triggers with intelligent predictive trend vectors.
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* --- SLIDE 2: Core Innovation --- */}
-                  {currentSlide === 1 && (
-                    <div className="space-y-6">
-                      <div className="space-y-2">
-                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">CORE INNOVATION</span>
-                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">Hybrid Intelligence Architecture</h1>
-                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed">
-                          By partitioning execution between <strong>Deterministic Local Edge Models</strong> and <strong>Generative Server-side Cohorts</strong>, we resolve both latency constraints and edge resource budgets.
-                        </p>
-                      </div>
-
-                      {/* Interactive Innovation diagram */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-[9.5px]">
-                        
-                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-sm flex flex-col justify-between">
-                          <div>
-                            <div className="flex items-center space-x-1.5 mb-2 border-b border-slate-200 pb-1.5">
-                              <Activity size={12} className="text-teal-600" />
-                              <span className="font-extrabold text-slate-800 uppercase tracking-wide">1. Edge Telemetry</span>
-                            </div>
-                            <p className="text-slate-500 text-[8.5px] font-sans font-semibold leading-relaxed mb-3">
-                              High-velocity vital signs (SPO2, Heart Rate, Respiration Rate, Temperature) continuously stream from bedside monitors.
-                            </p>
-                          </div>
-                          <div className="bg-white p-2 border border-slate-150 rounded-sm text-center font-bold text-teal-700 text-[9px]">
-                            120 Hz Continuous Stream
-                          </div>
-                        </div>
-
-                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-sm flex flex-col justify-between">
-                          <div>
-                            <div className="flex items-center space-x-1.5 mb-2 border-b border-slate-200 pb-1.5">
-                              <Database size={12} className="text-indigo-600" />
-                              <span className="font-extrabold text-slate-800 uppercase tracking-wide">2. Edge Classifier</span>
-                            </div>
-                            <p className="text-slate-500 text-[8.5px] font-sans font-semibold leading-relaxed mb-3">
-                              Deterministic Logistic Regression maps vital thresholds locally in React. Yields instantaneous triage risk values offline.
-                            </p>
-                          </div>
-                          <div className="bg-indigo-50 p-2 border border-indigo-200 rounded-sm text-center font-bold text-indigo-700 text-[9px] animate-pulse">
-                            0ms Latency Local Prediction
-                          </div>
-                        </div>
-
-                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-sm flex flex-col justify-between">
-                          <div>
-                            <div className="flex items-center space-x-1.5 mb-2 border-b border-slate-200 pb-1.5">
-                              <Sparkles size={12} className="text-[#7C3AED]" />
-                              <span className="font-extrabold text-[#7C3AED] uppercase tracking-wide">3. Gemini Server</span>
-                            </div>
-                            <p className="text-slate-500 text-[8.5px] font-sans font-semibold leading-relaxed mb-3">
-                              High-complexity patients are pushed through an Express proxy to invoke the Gemini-3.5-Flash advisor for explainable AI summaries.
-                            </p>
-                          </div>
-                          <div className="bg-purple-50 p-2 border border-purple-200 rounded-sm text-center font-bold text-purple-700 text-[9px]">
-                            Advanced Semantic Diagnosis
-                          </div>
-                        </div>
-
-                      </div>
-
-                      <div className="bg-emerald-50 border border-emerald-250 p-4 rounded-sm flex justify-between items-center text-[10px]">
-                        <div>
-                          <span className="font-extrabold text-emerald-800 block uppercase font-mono mb-0.5">BENEFIT: EDGE-RESILIENT CLINICAL CONTINUITY</span>
-                          <span className="text-slate-600 font-semibold">
-                            If hospital Wi-Fi disconnects, local edge classification continues predicting hazard risks perfectly offline inside the physician's browser session.
-                          </span>
-                        </div>
-                        <span className="bg-emerald-100 text-emerald-800 px-2 py-1 border border-emerald-250 uppercase font-extrabold font-mono rounded-sm text-[8.5px] shrink-0 ml-4">
-                          FAIL-SAFE SECURED
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* --- SLIDE 3: Feasibility --- */}
-                  {currentSlide === 2 && (
-                    <div className="space-y-6">
-                      <div className="space-y-2">
-                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">FEASIBILITY VALUE</span>
-                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">Institutional Feasibility & Deployment</h1>
-                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed">
-                          Engineering feasibility demands compliance with existing clinical constraints. CareSync AI works with legacy technology stacks, keeping local hospital networks safe and responsive.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-[10px]">
-                        <div className="space-y-3.5">
-                          <h3 className="font-extrabold text-slate-800 uppercase tracking-wider font-mono border-b border-slate-100 pb-1">
-                            Technical Requirements
-                          </h3>
-                          <ul className="space-y-2.5 font-semibold text-slate-600 list-disc pl-4 leading-relaxed">
-                            <li>
-                              <strong className="text-slate-800">Browser Ready:</strong> Runs fully on zero-footprint web clients (Chrome, Safari, Edge) without local thick-app installations or driver packaging.
-                            </li>
-                            <li>
-                              <strong className="text-slate-800">FHIR Consent Standard:</strong> Integrates easily with existing EHR vendors (Epic, Cerner) via secure HTTP/SSL API endpoints.
-                            </li>
-                            <li>
-                              <strong className="text-slate-800">Lightweight Server Footprint:</strong> Backed by a standard Node container requiring only minimal physical resources for deployment.
-                            </li>
-                          </ul>
-                        </div>
-
-                        <div className="space-y-3.5">
-                          <h3 className="font-extrabold text-slate-800 uppercase tracking-wider font-mono border-b border-slate-100 pb-1">
-                            Administrative compliance
-                          </h3>
-                          <ul className="space-y-2.5 font-semibold text-slate-600 list-disc pl-4 leading-relaxed">
-                            <li>
-                              <strong className="text-slate-800">HIPAA Compliance Blueprint:</strong> Secure backend API proxy strips all patient identifiers (demographics, SSNs, phone numbers) before sending telemetry numbers to LLMs.
-                            </li>
-                            <li>
-                              <strong className="text-slate-800">Low Operational Risk:</strong> Clinical decisions are always advisory. Doctors and nurses retain ultimate override capability at the bedsides.
-                            </li>
-                            <li>
-                              <strong className="text-slate-800">Smart Escalation Fail-safe:</strong> Automatically escalates alerts through 4 critical levels (Primary, Departmental, ICU Station, and Emergency Broadcast) with interactive on-device Acceptance Handshaking to optimize Estimated Time to Intervention (ETI).
-                            </li>
-                          </ul>
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-slate-50 border border-slate-200 text-slate-500 font-mono text-[9px] text-center rounded-sm">
-                        CURRENT SYSTEM COMPLIANCE RATE: <span className="font-bold text-indigo-600">100% EXCEL BASED AUDITING SANCTIONED</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* --- SLIDE 4: Future Scope --- */}
-                  {currentSlide === 3 && (
-                    <div className="space-y-6">
-                      <div className="space-y-2">
-                        <span className="text-[9px] font-extrabold text-indigo-600 uppercase tracking-widest block font-mono">FUTURE SCALABILITY</span>
-                        <h1 className="text-[22px] font-extrabold text-slate-900 leading-tight tracking-tight">Future Scope & IoMT Mesh</h1>
-                        <p className="text-slate-500 text-[11px] font-medium leading-relaxed font-sans">
-                          Integrating the "Internet of Medical Things" (IoMT) opens next-generation pathways for remote clinical guidance, chronic wearable analytics, and proactive smart wards.
-                        </p>
-                      </div>
-
-                      {/* Mock IoMT Live Signal Monitor */}
-                      <div className="bg-slate-950 text-slate-300 p-4 border border-slate-850 rounded-sm font-mono text-[10px]">
-                        <div className="flex justify-between border-b border-slate-800 pb-2 mb-3.5 items-center">
-                          <div className="flex items-center space-x-2">
-                            <span className="h-2 w-2 rounded-full bg-indigo-500 animate-ping"></span>
-                            <span className="text-white font-bold leading-none">MOCK ACTIVE IOMT WEARABLE FEED</span>
-                          </div>
-                          <span className="text-[7.5px] bg-slate-800 text-indigo-400 px-1.5 py-0.2 rounded font-extrabold">PORT 3000 CONSOLE</span>
-                        </div>
-                        
-                        <div className="space-y-2.5 text-[8.5px] font-mono text-slate-400 leading-normal">
-                          <div className="flex justify-between hover:text-white transition-colors">
-                            <span>[04:41:09] INGESTING WEARABLE WRIST HR TRANSMISSION...</span>
-                            <span className="text-[#059669] font-bold">78 BPM (OK)</span>
-                          </div>
-                          <div className="flex justify-between hover:text-white transition-colors">
-                            <span>[04:41:10] PARSING SMART BED MATTRESS TEMPERATURE INDEX...</span>
-                            <span className="text-slate-300 font-sans">36.7 °C (STABLE)</span>
-                          </div>
-                          <div className="flex justify-between hover:text-white transition-colors">
-                            <span>[04:41:11] CALCULATING SLEEP DRIFT ACCELEROMETRY MATRIX...</span>
-                            <span className="text-indigo-455">98.2% SENSOR ACCURACY</span>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 pt-3.5 border-t border-slate-900 flex justify-between items-center text-[9px]">
-                          <span className="text-slate-500">Target Scale: Multi-facility regional ICU routing and cloud predictive mesh networks.</span>
-                          <span className="text-[8px] border border-amber-600/30 text-amber-500 px-1.5 py-0.2 rounded lowercase italic">ready for deployment testing</span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-sans text-[10px]">
-                        <div className="p-3.5 border border-slate-200 hover:border-slate-300 transition-all rounded-sm">
-                          <h4 className="font-bold text-slate-800 mb-1">Wearables & Home Recovery</h4>
-                          <p className="text-slate-550 font-semibold leading-relaxed">
-                            Extend the active priority triage logic to home-discharge monitoring bands, allowing hospital staff to flag patients requiring urgent re-admission.
-                          </p>
-                        </div>
-                        <div className="p-3.5 border border-slate-200 hover:border-slate-300 transition-all rounded-sm">
-                          <h4 className="font-bold text-slate-800 mb-1">Smart Hospital Hardware</h4>
-                          <p className="text-slate-550 font-semibold leading-relaxed">
-                            Embed physical beacons on medication carts to dynamically correlate clinician attendance frequencies with target patient physiological stability curves.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Footer Controls of Deck */}
-                <div className="flex justify-between items-center border-t border-slate-100 pt-5 mt-6 font-mono">
-                  <div>
-                    <button
-                      onClick={() => setCurrentSlide(prev => Math.max(0, prev - 1))}
-                      disabled={currentSlide === 0}
-                      className="px-3.5 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-[10px] uppercase text-slate-600 font-extrabold disabled:opacity-40 rounded-sm cursor-pointer transition-colors"
-                    >
-                      &larr; Previous Slide
-                    </button>
-                  </div>
-
-                  {/* Dot Indicators */}
-                  <div className="flex space-x-2">
-                    {[0, 1, 2, 3].map(slideIdx => (
-                      <button
-                        key={slideIdx}
-                        onClick={() => setCurrentSlide(slideIdx)}
-                        className={`h-2.5 w-2.5 rounded-full transition-all ${
-                          currentSlide === slideIdx ? "bg-slate-800 scale-125" : "bg-slate-200"
-                        }`}
-                        title={`Go to slide ${slideIdx + 1}`}
-                      />
-                    ))}
-                  </div>
-
-                  <div>
-                    {currentSlide < 3 ? (
-                      <button
-                        onClick={() => setCurrentSlide(prev => Math.min(3, prev + 1))}
-                        className="px-3.5 py-1.5 bg-slate-850 hover:bg-slate-750 text-white text-[10px] uppercase font-bold rounded-sm cursor-pointer transition-all flex items-center space-x-1"
-                      >
-                        <span>Next Slide</span>
-                        <ChevronRight size={11} />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setActiveTab("live");
-                          setCurrentSlide(0);
-                        }}
-                        className="px-3.5 py-1.5 bg-[#E6F4EA] hover:bg-[#d8f0dc] text-[#059669] text-[10px] uppercase font-bold rounded-sm cursor-pointer transition-all border border-[#a2dfae]"
-                      >
-                        Launch Live Viewport &rarr;
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-              </div>
             </div>
           )}
 
@@ -4068,8 +3983,37 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Main bento structural grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
+                {/* Mode Selector Tab */}
+                <div className="flex border-b border-slate-200 mb-5 text-slate-600 select-none bg-slate-50/50 p-1 rounded-md max-w-fit mt-1">
+                  <button
+                    onClick={() => setCompanionSubTab("hospital")}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-sm text-[11px] font-bold tracking-tight cursor-pointer transition-all ${
+                      companionSubTab === "hospital"
+                        ? "bg-white text-slate-900 border-b-2 border-emerald-500 shadow-xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    <Activity size={13} className={companionSubTab === "hospital" ? "text-emerald-500 animate-pulse" : ""} />
+                    <span>🏥 Hospital Edge Ambulance & ICU HUD</span>
+                  </button>
+                  <button
+                    id="patient-companion-mode-btn"
+                    onClick={() => setCompanionSubTab("patient")}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-sm text-[11px] font-bold tracking-tight cursor-pointer transition-all ${
+                      companionSubTab === "patient"
+                        ? "bg-white text-slate-900 border-b-2 border-blue-500 shadow-xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    <Sparkles size={13} className={companionSubTab === "patient" ? "text-blue-500 animate-[pulse_2s_infinite]" : ""} />
+                    <span className="font-mono font-black animate-pulse bg-blue-105 text-blue-800 px-1 py-0.2 rounded-xs mr-1 text-[8px]">NEW</span>
+                    <span>🏡 Post-Discharge Smart Patient & Medication Companion</span>
+                  </button>
+                </div>
+
+                {companionSubTab === "hospital" ? (
+                  /* Main bento structural grid */
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
                   
                   {/* LEFT BENTO (Span 4): Smartwatch Device Simulator & iOS Message Center */}
                   <div className="lg:col-span-4 flex flex-col space-y-4">
@@ -4499,6 +4443,9 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              ) : (
+                <PatientCompanion />
+              )}
 
                 {/* Ultimate CareSync Ecosystem Flow horizontal infographic */}
                 <div className="mt-4 border border-slate-200 bg-slate-900 text-slate-400 p-4 font-mono select-none rounded">

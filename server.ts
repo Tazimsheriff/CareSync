@@ -135,6 +135,123 @@ async function startServer() {
     }
   });
 
+  // POST endpoint to generate comforting drug explanations in selected language
+  app.post("/api/explain-med", async (req, res) => {
+    try {
+      const { medicine, language, age } = req.body;
+      const patientAge = age || 68;
+      const targetLang = language || "English";
+      
+      const prompt = `A geriatric patient named Susan White, aged ${patientAge}, is receiving a medicine reminder.
+      Explain the purpose and guidelines for taking the medicine "${medicine}" in "${targetLang}" language.
+      Strict limits:
+      - Keep the tone exceptionally comforting, clear, and reassuring, as if spoken by a daughter or head nurse.
+      - Write exactly 2 blocks/sentences.
+      - Dedicate sentence 1 to what the medicine does (its purpose, e.g. control blood sugar).
+      - Dedicate sentence 2 to exactly how and when to take it relative to breakfast/food.
+      - Return the text in the requested script/alphabet style (e.g. Tamil characters for Tamil, Hindi script for Hindi, etc.).`;
+
+      const ai = getAIClient();
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync AI Multilingual Companion. You translate complex medical drug prescriptions into extremely warm, easy-to-understand, supportive vocal blocks in non-English native languages (Tamil, Hindi, Telugu, Malayalam) or English.",
+        }
+      });
+
+      res.json({ success: true, text: response.text || "" });
+    } catch (err: any) {
+      console.error("Explain Med API Error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST endpoint to handle pill identification with Gemini Vision or descriptive text
+  app.post("/api/identify-pill", async (req, res) => {
+    try {
+      const { image, textQuery } = req.body;
+      const ai = getAIClient();
+      const contents: any[] = [];
+
+      if (image) {
+        // Strip data:image/... base64 prefix if present
+        const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+        contents.push({
+          inlineData: {
+            mimeType: "image/png",
+            data: base64Data
+          }
+        });
+      }
+
+      contents.push({
+        text: textQuery || "A patient shows this medicine pill. Identify this tablet. Return standard Name & strength, Color, Shape, dosage, and food safety guideline in structural JSON."
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: contents,
+        config: {
+          systemInstruction: "You are the CareSync Pill Recognition Engine. Inspect the provided image or physical description. Perform a high-fidelity image match, then output JSON fitting the requested schema perfectly.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              medicine: { type: Type.STRING, description: "Official pharmaceutical name and standard milligram dose, e.g. Metformin 500mg, Aspirin 75mg, or Atorvastatin 20mg" },
+              color: { type: Type.STRING, description: "The color of the tablet, e.g., White, Red, Blue, Yellow" },
+              shape: { type: Type.STRING, description: "The physical shape, e.g., round, oval, capsule, hexagonal" },
+              dosage: { type: Type.STRING, description: "Prescription dosage, e.g., Take 1 tablet" },
+              purpose: { type: Type.STRING, description: "Primary medical use in simple patient terms, e.g. controls blood sugar levels, prevents blood clots, or lowers cholesterol" },
+              food: { type: Type.STRING, description: "Timing guideline, e.g., Take after breakfast, Take with water before lunch, or Take before bed" }
+            },
+            required: ["medicine", "color", "shape", "dosage", "purpose", "food"]
+          }
+        }
+      });
+
+      const text = response.text;
+      if (!text) {
+        throw new Error("No response text returned from the model.");
+      }
+
+      res.json({ success: true, data: JSON.parse(text.trim()) });
+    } catch (err: any) {
+      console.error("Identify Pill API Error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST endpoint to handle patient Q&A dialog
+  app.post("/api/patient-chat", async (req, res) => {
+    try {
+      const { message, language, age, selectedMed } = req.body;
+      const targetLang = language || "English";
+      const currentMed = selectedMed || "Metformin";
+
+      const prompt = `A senior patient aged ${age || 68} asks the CareSync Health Companion: "${message}" regarding their medication "${currentMed}".
+      Formulate a loving, clear response in "${targetLang}" language script.
+      Safety Rules:
+      - Reply under 3 simple sentences.
+      - Always prioritize clinical safety (e.g. advise taking medicines with room-temperature water rather than coffee, tea, soft drinks, or juices, and remind them to query their doctor for complex changes).
+      - Be exceptionally encouraging and respectful.`;
+
+      const ai = getAIClient();
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync Home Companion chatbot, answering questions for elderly patients with supreme medical safety, professional warmth, and clarity."
+        }
+      });
+
+      res.json({ success: true, text: response.text || "" });
+    } catch (err: any) {
+      console.error("Patient Chat API Error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Vite middleware in dev or serving static assets in prod
   if (process.env.NODE_ENV !== "production") {
     console.log("Vite dev server is integrated recursively.");
