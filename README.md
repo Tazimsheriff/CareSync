@@ -41,6 +41,11 @@ CareSync is structured into seven high-density, interactive views, each addressi
 ### 7. 📥 High-Density Clinical Imports (`Kaggle Core`)
 - **Kaggle Ingest Sandbox**: Replicates imports of high-frequency datasets (e.g., MIMIC-IV Clinical ICU logs, sepsis cohorts) to evaluate predictive alert structures against large clinical databases.
 
+### 👥 8. Unified Clinician Central Access Hub (`Central Access Console`)
+- **Master Access Gateway**: Solves the core challenge of patient data fragmentation. Provides a single, secure console for a single clinician to access all 20 ICU ward beds' live telemetry data instantly from any tab.
+- **Global Patient Switcher & Search**: Includes real-time keyword search (by name, diagnosis, bed, or condition) and quick-filtering by clinical severity (Critical, High Risk, Stable). Switching patients instantly updates the entire dashboard focus.
+- **Real-Time Ward Status Overview**: Displays compact metrics (active critical counts, high-risk counts) and live physiological readings for the entire ICU ward in a high-density, centralized popover directory.
+
 ---
 
 ## 🛠️ Physiological Formulas & Scoring Engine

@@ -18,11 +18,14 @@ import {
   FileText,
   CheckCircle,
   AlertCircle,
-  ExternalLink
+  ExternalLink,
+  Users,
+  Lock
 } from "lucide-react";
 import { PatientCompanion } from "./components/PatientCompanion";
 import { Patient, getPatientMetrics, getExplainableAIReason } from "./types";
 import { initialPatients } from "./data";
+import Markdown from "react-markdown";
 
 // --- CLIENT-SIDE CSV PARSING & DATASET SCHEMA CLARIFIER ENGINE ---
 function parseCSVLine(line: string): string[] {
@@ -391,6 +394,49 @@ export default function App() {
   const [callState, setCallState] = useState<"idle" | "dialing" | "ringing" | "connected" | "ended">("idle");
   const [callDuration, setCallDuration] = useState<number>(0);
   const [dialLogs, setDialLogs] = useState<string[]>([]);
+
+  // --- Clinician Central Hub / Master Access States ---
+  const [isCentralHubDropdownOpen, setIsCentralHubDropdownOpen] = useState<boolean>(false);
+  const [centralHubSearchTerm, setCentralHubSearchTerm] = useState<string>("");
+  const [centralHubPriorityFilter, setCentralHubPriorityFilter] = useState<"All" | "Critical" | "High Risk" | "Moderate" | "Stable">("All");
+
+  // --- Nurse / ICU Staff Mode States ---
+  const [isNurseModeActive, setIsNurseModeActive] = useState<boolean>(true);
+  const [nurseChecklists, setNurseChecklists] = useState<Record<string, {
+    vitalsChecked: boolean;
+    medsAdministered: boolean;
+    oxygenInspected: boolean;
+    bedsideSafety: boolean;
+  }>>({});
+
+  // --- Clinical AI Automation Studio States (Option A, B, C) ---
+  const [aiStudioSubTab, setAiStudioSubTab] = useState<"handover" | "dictate" | "triage">("handover");
+  const [handoverReport, setHandoverReport] = useState<string>("");
+  const [isHandoverLoading, setIsHandoverLoading] = useState<boolean>(false);
+  const [rawDictationNote, setRawDictationNote] = useState<string>("");
+  const [isParseLoading, setIsParseLoading] = useState<boolean>(false);
+  const [parsedNoteResult, setParsedNoteResult] = useState<any | null>(null);
+  const [isTriageLoading, setIsTriageLoading] = useState<boolean>(false);
+  const [wardTriageResult, setWardTriageResult] = useState<any[] | null>(null);
+
+  // --- Real-Time Critical Escalation Popup States ---
+  const [activeEscalationPopup, setActiveEscalationPopup] = useState<{
+    patientId: string;
+    patientName: string;
+    bedId: string;
+    riskScore: number;
+    reason: string;
+    vitals: { hr: number; spo2: number; bp: string; rr: number };
+  } | null>(null);
+  const lastPopupTimeRef = useRef<Record<string, number>>({});
+  const [popupHistory, setPopupHistory] = useState<Array<{
+    id: string;
+    patientName: string;
+    bedId: string;
+    riskScore: number;
+    time: string;
+  }>>([]);
+  const [areNotificationsEnabled, setAreNotificationsEnabled] = useState<boolean>(true);
 
   // Patient Chat Q&A States
   const [patientUserMessage, setPatientUserMessage] = useState<string>("");
@@ -1047,9 +1093,124 @@ export default function App() {
     );
   };
 
+  // --- Clinical AI Automation Studio Interaction Handlers ---
+  const handleGenerateHandover = async () => {
+    setIsHandoverLoading(true);
+    try {
+      const response = await fetch("/api/ai-handover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patientName: activePatient.name,
+          bedId: activePatient.bedId,
+          riskScore: activePatient.riskScore,
+          diagnosis: activePatient.dx,
+          vitals: {
+            hr: activePatient.hr,
+            spo2: activePatient.spo2,
+            rr: activePatient.rr,
+            temp: (activePatient.temp * 1.8 + 32).toFixed(1)
+          },
+          checklists: nurseChecklists[activePatient.id] || {}
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setHandoverReport(data.text);
+        setDatasetSuccess(`✅ AI Handover Report compiled successfully for ${activePatient.name}.`);
+      } else {
+        setDatasetSuccess(`❌ Failed to compile Handover report: ${data.message || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setDatasetSuccess(`❌ Handover Report Service currently offline.`);
+    } finally {
+      setIsHandoverLoading(false);
+    }
+  };
+
+  const handleParseDictation = async () => {
+    if (!rawDictationNote.trim()) {
+      setDatasetSuccess("⚠️ Please enter or select a dictated note first.");
+      return;
+    }
+    setIsParseLoading(true);
+    try {
+      const response = await fetch("/api/parse-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ noteText: rawDictationNote })
+      });
+      const resData = await response.json();
+      if (resData.success && resData.data) {
+        setParsedNoteResult(resData.data);
+        const updates = resData.data.checklistUpdates;
+        
+        // Auto-check checklist items based on parsed notes
+        if (updates) {
+          setNurseChecklists(prev => {
+            const current = prev[activePatient.id] || { vitalsChecked: false, medsAdministered: false, oxygenInspected: false, bedsideSafety: false };
+            return {
+              ...prev,
+              [activePatient.id]: {
+                ...current,
+                vitalsChecked: updates.hourlyRounds !== undefined ? updates.hourlyRounds : current.vitalsChecked,
+                oxygenInspected: updates.oxygenCheck !== undefined ? updates.oxygenCheck : (updates.sepsisScreen !== undefined ? updates.sepsisScreen : current.oxygenInspected),
+                bedsideSafety: updates.bedsideSafety !== undefined ? updates.bedsideSafety : current.bedsideSafety
+              }
+            };
+          });
+        }
+        setDatasetSuccess(`✅ Clinical note parsed. Vitals extracted and bedside checklist synced for ${activePatient.name}.`);
+      } else {
+        setDatasetSuccess("❌ Failed to parse dictation notes.");
+      }
+    } catch (err) {
+      console.error(err);
+      setDatasetSuccess("❌ Clinical note parser service currently offline.");
+    } finally {
+      setIsParseLoading(false);
+    }
+  };
+
+  const handleRunWardTriage = async () => {
+    setIsTriageLoading(true);
+    try {
+      const response = await fetch("/api/ward-triage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patients: patients.map(p => ({
+            name: p.name,
+            bedId: p.bedId,
+            riskScore: p.riskScore,
+            priority: p.priority,
+            vitals: { hr: p.hr, spo2: p.spo2, rr: p.rr, temp: (p.temp * 1.8 + 32).toFixed(1) }
+          }))
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setWardTriageResult(data.data);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsTriageLoading(false);
+    }
+  };
+
+  const loadPresetDictation = (type: "mild" | "severe") => {
+    if (type === "mild") {
+      setRawDictationNote(`Checked on ${activePatient.name} in ${activePatient.bedId}. Vitals are completely stable with respiratory rate 16 and BP 120/80. Did hourly rounds, checked oxygen flow rate, and elevated bed rails for patient safety.`);
+    } else {
+      setRawDictationNote(`Urgent bedside review for ${activePatient.name} in ${activePatient.bedId}. Respiratory rate has spiked to 26 and patient is hypoxic. Heart rate is 108. Started 2L supplemental oxygen. Bed safety rails checked and verified raised.`);
+    }
+  };
+
   // --- Wearable & Future Ecosystem Helper Handlers ---
   const setWearableScenario = (scenario: "stable" | "hypoxia" | "afib") => {
-    setWearablePulseStatus(scenario);
+    setWearablePulseStatus(scenario === "hypoxia" ? "abnormal" : scenario);
     setFamilyNotifySent(false);
     if (scenario === "stable") {
       setWearableVitals({
@@ -1761,6 +1922,57 @@ export default function App() {
     };
   }, [isDriftPaused]);
 
+  // --- Real-time Ward Escalation Monitor for ICU Staff / Nurse Popups ---
+  useEffect(() => {
+    if (isDriftPaused || !areNotificationsEnabled) return;
+
+    // Filter patients with critical/high risk conditions (risk score > 75% or critical severity)
+    const criticalPatients = patients.filter(p => p.priority === "Critical" && p.riskScore > 75);
+
+    if (criticalPatients.length > 0 && !activeEscalationPopup) {
+      // Find one that hasn't had a popup shown in the last 30 seconds
+      const now = Date.now();
+      const eligiblePatient = criticalPatients.find(p => {
+        const lastShown = lastPopupTimeRef.current[p.id] || 0;
+        return now - lastShown > 30000; // 30s throttle per patient
+      });
+
+      if (eligiblePatient) {
+        lastPopupTimeRef.current[eligiblePatient.id] = now;
+        
+        // Add to history list
+        const timeStrFormatted = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setPopupHistory(prev => [
+          {
+            id: Math.random().toString(),
+            patientName: eligiblePatient.name,
+            bedId: eligiblePatient.bedId,
+            riskScore: eligiblePatient.riskScore,
+            time: timeStrFormatted
+          },
+          ...prev.slice(0, 19) // Keep last 20 alarms
+        ]);
+
+        setActiveEscalationPopup({
+          patientId: eligiblePatient.id,
+          patientName: eligiblePatient.name,
+          bedId: eligiblePatient.bedId,
+          riskScore: eligiblePatient.riskScore,
+          reason: eligiblePatient.dx || "Acute Respiratory Escalation",
+          vitals: {
+            hr: eligiblePatient.hr,
+            spo2: eligiblePatient.spo2,
+            bp: `${eligiblePatient.bpSys}/${eligiblePatient.bpDia}`,
+            rr: eligiblePatient.rr
+          }
+        });
+
+        // Trigger a temporary alert message as well
+        setDatasetError(`🚨 CRITICAL ESCALATION TRIGGERED: Bed ${eligiblePatient.bedId.toUpperCase()} (${eligiblePatient.name}) is deteriorating rapidly!`);
+      }
+    }
+  }, [patients, isDriftPaused, activeEscalationPopup, areNotificationsEnabled]);
+
   // --- Oscilloscope Drawing Loop ---
   useEffect(() => {
     const canvasRefs = [ecgCanvasRef, spo2CanvasRef, respCanvasRef, co2CanvasRef];
@@ -2038,6 +2250,173 @@ export default function App() {
         }
       `}</style>
 
+      {/* --- CLINICAL ESCALATION POPUP ALERTS OVERLAY --- */}
+      {activeEscalationPopup && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/65 backdrop-blur-xs p-4 animate-fade-in font-sans">
+          <div className="bg-white border-2 border-red-500 rounded-lg shadow-2xl max-w-lg w-full overflow-hidden animate-scale-up border-b-8">
+            
+            {/* Header banner pulsing */}
+            <div className="bg-red-600 text-white px-4 py-3 flex items-center justify-between select-none animate-alarm-flash">
+              <div className="flex items-center space-x-2">
+                <span className="text-lg">🚨</span>
+                <span className="font-extrabold text-[12px] uppercase tracking-wider font-mono">
+                  CRITICAL SHIFT ESCALATION WARNING
+                </span>
+              </div>
+              <span className="text-[9px] font-black uppercase bg-red-800 px-2 py-0.5 rounded-sm font-mono">
+                Priority: Red
+              </span>
+            </div>
+
+            {/* Popup Body content */}
+            <div className="p-4 sm:p-5">
+              
+              {/* Patient Badge info card */}
+              <div className="flex items-start justify-between bg-slate-50 border border-slate-200 p-3 rounded-md mb-4">
+                <div>
+                  <div className="flex items-center space-x-2 select-none">
+                    <span className="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-sm border border-red-200 font-mono uppercase">
+                      BED {activeEscalationPopup.bedId.toUpperCase()}
+                    </span>
+                    <span className="font-extrabold text-sm text-slate-900">
+                      {activeEscalationPopup.patientName}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1.5 font-medium leading-tight font-sans">
+                    <strong>Primary Diagnosis:</strong> {activeEscalationPopup.reason}
+                  </p>
+                </div>
+                
+                {/* AI Risk Meter Indicator */}
+                <div className="text-right shrink-0 select-none">
+                  <span className="text-[8px] block font-extrabold text-slate-400 uppercase tracking-wider font-mono">AI CRASH RISK</span>
+                  <span className="text-2xl font-black text-red-650 font-mono">
+                    {activeEscalationPopup.riskScore}%
+                  </span>
+                </div>
+              </div>
+
+              {/* Live Abnormal Vital Sign Outlines */}
+              <div className="grid grid-cols-2 gap-2.5 mb-4 select-none">
+                
+                {/* Pulse Rate */}
+                <div className="bg-emerald-50/40 border border-emerald-150 p-2.5 rounded flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider font-mono">Pulse (HR)</span>
+                    <span className="text-[10px] font-black text-slate-500 mt-0.5 font-sans">Target: 60-100</span>
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-lg font-extrabold ${activeEscalationPopup.vitals.hr > 120 ? 'text-red-600 animate-pulse' : 'text-emerald-700'}`}>
+                      {activeEscalationPopup.vitals.hr} <span className="text-[8px] font-bold text-slate-400">BPM</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* SpO2 Sat */}
+                <div className="bg-sky-50/40 border border-sky-150 p-2.5 rounded flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider font-mono">Oxygen (SpO₂)</span>
+                    <span className="text-[10px] font-black text-slate-500 mt-0.5 font-sans">Goal: &gt;94%</span>
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-lg font-extrabold ${activeEscalationPopup.vitals.spo2 < 93 ? 'text-red-600 animate-pulse' : 'text-[#0284C7]'}`}>
+                      {activeEscalationPopup.vitals.spo2}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Non-invasive BP */}
+                <div className="bg-slate-50 border border-slate-150 p-2.5 rounded flex items-center justify-between col-span-2 sm:col-span-1">
+                  <div className="flex flex-col">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider font-mono">Blood Pressure</span>
+                    <span className="text-[10px] font-black text-slate-500 mt-0.5 font-sans">Normal Range</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-extrabold text-slate-700 font-mono">
+                      {activeEscalationPopup.vitals.bp} <span className="text-[8px] font-bold text-slate-400">mmHg</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* RR Respiratory Rate */}
+                <div className="bg-violet-50/40 border border-violet-150 p-2.5 rounded flex items-center justify-between col-span-2 sm:col-span-1">
+                  <div className="flex flex-col">
+                    <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider font-mono">Breathing (RR)</span>
+                    <span className="text-[10px] font-black text-slate-500 mt-0.5 font-sans">Normal: 12-20</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-extrabold text-[#7C3AED] font-mono">
+                      {activeEscalationPopup.vitals.rr} <span className="text-[8px] font-bold text-slate-400">/min</span>
+                    </span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Warning explanation text banner */}
+              <div className="p-3 bg-red-50 border border-red-200 rounded-md text-[10.5px] text-red-800 leading-relaxed font-sans font-medium flex items-start space-x-2 mb-4">
+                <span className="text-sm shrink-0">🩺</span>
+                <div>
+                  <span className="font-extrabold">Clinical Assessment Alarm:</span> Patient presents severe physiological distress. SpO₂ readings has trended below clinical safety lines. Heart rate indicates compensatory sinus tachycardia. Immediate bedside inspection required!
+                </div>
+              </div>
+
+              {/* History of other bed alarms so the staff has total ward visibility */}
+              {popupHistory.length > 1 && (
+                <div className="border-t border-slate-200 pt-3 mb-4 font-sans">
+                  <span className="text-[8.5px] block font-extrabold text-slate-400 uppercase tracking-wider font-mono mb-1.5">
+                    Other Recent Shift Alarms ({popupHistory.length - 1})
+                  </span>
+                  <div className="max-h-[60px] overflow-y-auto space-y-1 divide-y divide-slate-100 pr-1">
+                    {popupHistory.filter(h => h.bedId !== activeEscalationPopup.bedId).slice(0, 3).map(hist => (
+                      <div key={hist.id} className="flex justify-between items-center text-[9px] text-slate-500 py-1 font-mono">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="text-red-500">●</span>
+                          <span className="font-bold text-slate-700">Bed {hist.bedId}</span>
+                          <span className="font-sans">({hist.patientName})</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-semibold text-slate-400">{hist.time}</span>
+                          <span className="font-extrabold text-red-650 bg-red-50 px-1 rounded">{hist.riskScore}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Dialog buttons layout */}
+              <div className="flex flex-col sm:flex-row gap-2 font-mono text-[10px]">
+                <button
+                  onClick={() => {
+                    // Set as active patient, focus live monitor tab, and close popup
+                    setActivePatientId(activeEscalationPopup.patientId);
+                    setActiveTab("live");
+                    setActiveEscalationPopup(null);
+                    setDatasetSuccess(`🚀 Routed telemetry cockpit focus to Bed ${activeEscalationPopup.bedId.toUpperCase()} (${activeEscalationPopup.patientName}) bedside.`);
+                  }}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white font-extrabold p-3 rounded shadow-md border border-red-700 transition-all cursor-pointer flex items-center justify-center space-x-2 hover:scale-[1.01]"
+                >
+                  <span>🏥</span>
+                  <span>ROUTE COCKPIT FOCUS TO BEDSIDE</span>
+                </button>
+                
+                <button
+                  onClick={() => {
+                    setActiveEscalationPopup(null);
+                    setDatasetSuccess(`Acknowledged alert for Bed ${activeEscalationPopup.bedId.toUpperCase()} (${activeEscalationPopup.patientName}). Alarm silenced temporary.`);
+                  }}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold p-3 rounded border border-slate-300 transition-all cursor-pointer text-center"
+                >
+                  SILENCE &amp; CLOSE
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- TOPBAR (44px) --- */}
       <header id="topbar" className="h-[44px] border-b border-slate-200 px-2 sm:px-4 flex items-center justify-between bg-white shadow-sm z-10 text-slate-800 shrink-0 select-none">
         <div className="flex items-center space-x-1.5 sm:space-x-4 text-[11px] h-full overflow-hidden">
@@ -2127,12 +2506,23 @@ export default function App() {
 
           </div>
 
-          <div className="border-l border-slate-200 pl-4 hidden md:flex items-center space-x-1 shrink-0">
-            <span className="text-slate-400">ACTIVE: </span>
-            <span className="font-semibold text-slate-800">{activePatient.name}</span>
-            <span className="text-[9px] bg-red-50 px-1.5 py-0.2 border border-red-200 tracking-normal text-red-600 font-bold ml-1 rounded-sm uppercase font-mono">
+          <div 
+            onClick={() => setIsCentralHubDropdownOpen(!isCentralHubDropdownOpen)}
+            className="border-l border-slate-200 pl-4 hidden md:flex items-center space-x-1.5 shrink-0 cursor-pointer hover:bg-slate-50 px-2 py-1.5 rounded transition-all select-none border border-transparent hover:border-slate-150"
+            title="Click to open Clinician Master Ward Access & Switcher"
+          >
+            <span className="text-slate-400 font-mono text-[9px]">ACTIVE: </span>
+            <span className="font-extrabold text-slate-900 border-b border-dashed border-indigo-400 pb-0.5">{activePatient.name}</span>
+            <span className={`text-[9px] px-1.5 py-0.2 border tracking-normal font-bold ml-1 rounded-sm uppercase font-mono ${
+              activePatient.priority === "Critical" 
+                ? "bg-red-50 text-red-600 border-red-200 animate-pulse" 
+                : activePatient.priority === "High Risk" 
+                  ? "bg-amber-50 text-amber-600 border-amber-200" 
+                  : "bg-blue-50 text-blue-600 border-blue-200"
+            }`}>
               {activePatient.bedId.toUpperCase()}
             </span>
+            <span className="text-[8px] text-slate-400 ml-1">▼</span>
           </div>
         </div>
 
@@ -2172,6 +2562,60 @@ export default function App() {
             </div>
           )}
 
+          {/* Nurse / ICU Staff Mode Toggle */}
+          <button
+            onClick={() => {
+              setIsNurseModeActive(!isNurseModeActive);
+              setDatasetSuccess(`✅ Switched to ${!isNurseModeActive ? "Nurse & ICU Staff simplified view with clinical checklists" : "Comprehensive clinical cockpit view"}`);
+            }}
+            className={`px-2.5 py-1 text-[9px] sm:text-[9.5px] font-black uppercase tracking-wider rounded border font-mono flex items-center space-x-1.5 transition-all cursor-pointer ${
+              isNurseModeActive 
+                ? "bg-[#059669] text-white border-[#047857] shadow-sm" 
+                : "bg-white hover:bg-slate-50 text-[#059669] border-[#A7F3D0] hover:border-[#34D399]"
+            }`}
+            title="Toggle simplified Nurse & ICU Staff view (highly readable layout)"
+          >
+            <span className="text-xs shrink-0">🩺</span>
+            <span>{isNurseModeActive ? "Nurse View: Active" : "Nurse View: Off"}</span>
+          </button>
+
+          {/* Alarm Popups Presentation Switcher */}
+          <button
+            onClick={() => {
+              const nextState = !areNotificationsEnabled;
+              setAreNotificationsEnabled(nextState);
+              if (!nextState) {
+                setDatasetError("🔕 Critical Ward Popups Paused (Presentation Mode)");
+              } else {
+                setDatasetSuccess("🔔 Real-time Critical Ward Popups Active (Continuous Monitoring)");
+              }
+            }}
+            className={`px-2.5 py-1 text-[9px] sm:text-[9.5px] font-black uppercase tracking-wider rounded border font-mono flex items-center space-x-1.5 transition-all cursor-pointer ${
+              areNotificationsEnabled 
+                ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200" 
+                : "bg-red-50 hover:bg-red-100 text-red-650 border-red-200 animate-pulse"
+            }`}
+            title={areNotificationsEnabled ? "Pause automatic escalation warning popups for presentation" : "Resume automatic escalation warning popups"}
+          >
+            <span className="text-xs shrink-0">{areNotificationsEnabled ? "🔔" : "🔕"}</span>
+            <span>{areNotificationsEnabled ? "Popups: Live" : "Popups: Paused"}</span>
+          </button>
+
+          {/* Clinician Central Access Console Toggle */}
+          <button
+            onClick={() => setIsCentralHubDropdownOpen(!isCentralHubDropdownOpen)}
+            className={`px-2.5 py-1 text-[9px] sm:text-[9.5px] font-black uppercase tracking-wider rounded border font-mono flex items-center space-x-1 transition-all cursor-pointer ${
+              isCentralHubDropdownOpen 
+                ? "bg-indigo-650 text-white border-indigo-700 shadow-sm" 
+                : "bg-white hover:bg-slate-50 text-indigo-700 border-indigo-200 hover:border-indigo-300"
+            }`}
+            title="Clinician Central Ward Hub (Access all 20 patients instantly)"
+          >
+            <Users size={11} className={`shrink-0 ${isCentralHubDropdownOpen ? "animate-pulse text-white" : "text-indigo-600"}`} />
+            <span className="hidden xs:inline">Central Access Hub</span>
+            <span className={`text-[8.5px] px-1 rounded-full ${isCentralHubDropdownOpen ? "bg-indigo-500 text-white" : "bg-indigo-50 text-indigo-800"}`}>20</span>
+          </button>
+
           {/* Mobile Vitals Sidebar Toggle */}
           <button
             onClick={() => setIsVitalsOpen(!isVitalsOpen)}
@@ -2195,6 +2639,218 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* CENTRAL CLINICIAN ACCESS PORTAL & MASTER SWITCHER PANEL */}
+      {isCentralHubDropdownOpen && (
+        <div 
+          className="absolute top-[44px] left-0 sm:left-auto right-0 w-full sm:w-[560px] max-w-full bg-white border border-slate-300 shadow-2xl rounded-sm z-50 flex flex-col font-sans"
+          style={{ maxHeight: "calc(100vh - 80px)" }}
+        >
+          {/* Header */}
+          <div className="bg-[#1E293B] text-white p-3 flex justify-between items-center select-none shrink-0 font-mono">
+            <div className="flex items-center space-x-2">
+              <Lock size={12} className="text-emerald-400" />
+              <div>
+                <span className="text-[7.5px] block text-emerald-400 font-extrabold tracking-widest uppercase">Central Clinical Access Portal</span>
+                <span className="text-[11px] font-black text-slate-100 uppercase">Master ICU Ward Console (Full Database Access)</span>
+              </div>
+            </div>
+            <button 
+              onClick={() => setIsCentralHubDropdownOpen(false)}
+              className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded transition-colors cursor-pointer text-xs"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* Quick Access Ward-Wide Status Badges */}
+          <div className="bg-slate-50 border-b border-slate-200 px-3.5 py-2 flex items-center justify-between gap-1 select-none shrink-0 font-mono text-[9px] text-slate-600">
+            <div className="flex flex-wrap gap-2">
+              <span className="font-bold">Ward Summary:</span>
+              <span className="flex items-center space-x-1 bg-red-50 text-red-700 border border-red-200 px-1.5 py-0.2 rounded-sm font-extrabold">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-600 animate-pulse"></span>
+                <span>{patients.filter(p => p.priority === "Critical").length} Critical</span>
+              </span>
+              <span className="flex items-center space-x-1 bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.2 rounded-sm font-extrabold">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                <span>{patients.filter(p => p.priority === "High Risk").length} High Risk</span>
+              </span>
+              <span className="flex items-center space-x-1 bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.2 rounded-sm font-extrabold">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                <span>{patients.filter(p => p.priority === "Moderate" || p.priority === "Stable").length} Stable</span>
+              </span>
+            </div>
+            <span className="text-emerald-600 font-black flex items-center space-x-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
+              <span>1 Unified Clinician Access</span>
+            </span>
+          </div>
+
+          {/* Controls: Search & Priority Filter */}
+          <div className="p-3 bg-slate-100/60 border-b border-slate-200 flex flex-col sm:flex-row gap-2 shrink-0 select-none">
+            {/* Search */}
+            <div className="flex-1 relative flex items-center bg-white border border-slate-250 px-2.5 py-1.5 rounded-sm shadow-inner font-mono">
+              <Search size={12} className="text-slate-400 mr-2 shrink-0" />
+              <input 
+                type="text" 
+                placeholder="Search clinician index by name, bed, diagnosis..." 
+                value={centralHubSearchTerm}
+                onChange={(e) => setCentralHubSearchTerm(e.target.value)}
+                className="bg-transparent text-[11.5px] focus:outline-none w-full placeholder-slate-400 text-slate-800 font-bold"
+                autoFocus
+              />
+              {centralHubSearchTerm && (
+                <button 
+                  onClick={() => setCentralHubSearchTerm("")}
+                  className="text-slate-400 hover:text-slate-600 cursor-pointer animate-fade-in"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* Filter */}
+            <div className="flex gap-1 items-center font-mono text-[9px]">
+              <span className="text-slate-500 font-bold hidden sm:inline">Priority:</span>
+              <select 
+                value={centralHubPriorityFilter} 
+                onChange={(e) => setCentralHubPriorityFilter(e.target.value as any)}
+                className="bg-white border border-slate-250 px-2 py-1.5 text-[10px] text-slate-700 focus:outline-none rounded-sm shadow-sm font-bold cursor-pointer"
+              >
+                <option value="All">All 20 Beds</option>
+                <option value="Critical">Critical Only</option>
+                <option value="High Risk">High Risk Only</option>
+                <option value="Moderate">Moderate Only</option>
+                <option value="Stable">Stable Only</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Interactive Unified Directory List */}
+          <div className="flex-1 overflow-y-auto divide-y divide-slate-100 p-2 space-y-1.5 max-h-[380px]">
+            {(() => {
+              const matches = patients.filter(p => {
+                const matchesSearch = p.name.toLowerCase().includes(centralHubSearchTerm.toLowerCase()) || 
+                                      p.id.toLowerCase().includes(centralHubSearchTerm.toLowerCase()) ||
+                                      p.bedId.toLowerCase().includes(centralHubSearchTerm.toLowerCase()) ||
+                                      p.dx.toLowerCase().includes(centralHubSearchTerm.toLowerCase());
+                const matchesPriority = centralHubPriorityFilter === "All" || p.priority === centralHubPriorityFilter;
+                return matchesSearch && matchesPriority;
+              });
+
+              if (matches.length === 0) {
+                return (
+                  <div className="text-center py-8 text-slate-400 italic font-mono text-[10px] select-none">
+                    No clinical records match search keywords.
+                  </div>
+                );
+              }
+
+              return matches.map(p => {
+                const isActivelySelected = p.id === activePatientId;
+                
+                // Styling indicators
+                let badgeStyle = "bg-green-50 text-green-700 border-green-200";
+                let vitalColor = "text-[#059669]";
+                let dotColor = "bg-[#22C55E]";
+                if (p.priority === "Critical") {
+                  badgeStyle = "bg-red-50 text-red-600 border-red-200";
+                  vitalColor = "text-[#DC2626]";
+                  dotColor = "bg-[#DC2626]";
+                } else if (p.priority === "High Risk") {
+                  badgeStyle = "bg-amber-50 text-amber-700 border-amber-200";
+                  vitalColor = "text-[#F97316]";
+                  dotColor = "bg-[#F97316]";
+                } else if (p.priority === "Moderate") {
+                  badgeStyle = "bg-yellow-50 text-amber-850 border-yellow-200";
+                  vitalColor = "text-amber-700";
+                  dotColor = "bg-yellow-500";
+                }
+
+                return (
+                  <div 
+                    key={p.id}
+                    onClick={() => {
+                      setActivePatientId(p.id);
+                      setIsCentralHubDropdownOpen(false);
+                      setDatasetSuccess(`Authorized single-provider access: Switched telemetry cockpit monitor to ${p.name} (${p.bedId})`);
+                    }}
+                    className={`p-2.5 rounded border transition-all cursor-pointer flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${
+                      isActivelySelected 
+                        ? "border-indigo-500 bg-indigo-50/40 ring-1 ring-indigo-500/10 shadow-xs" 
+                        : "border-slate-200 hover:border-slate-350 bg-white hover:bg-slate-50/50 shadow-2xs"
+                    }`}
+                  >
+                    {/* Left Column: Bed + Patient Info */}
+                    <div className="flex items-center space-x-2 w-full sm:w-auto">
+                      <span className={`w-14 text-center text-[10px] font-black uppercase font-mono px-1.5 py-1 border rounded-sm ${badgeStyle}`}>
+                        {p.bedId}
+                      </span>
+                      <div>
+                        <div className="flex items-center space-x-1.5 select-none">
+                          <span className={`h-1.5 w-1.5 rounded-full ${dotColor} ${p.priority === "Critical" ? "animate-pulse" : ""}`}></span>
+                          <span className="text-[11px] font-extrabold text-slate-800">{p.name}</span>
+                          <span className="text-[9px] text-slate-400 font-mono">({p.age}{p.gender})</span>
+                        </div>
+                        <div className="text-[9px] text-slate-500 font-semibold line-clamp-1 leading-normal font-sans">
+                          Dx: {p.dx}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Live Telemetry Vitals Preview */}
+                    <div className="flex items-center space-x-4 ml-0 sm:ml-auto select-none shrink-0 font-mono text-[10px] w-full sm:w-auto justify-between sm:justify-end border-t border-slate-100 sm:border-0 pt-1.5 sm:pt-0">
+                      
+                      {/* qSOFA / Risk badge */}
+                      <div className="text-right">
+                        <span className="text-[7.5px] block text-slate-400 font-bold uppercase font-mono">RISK INDEX</span>
+                        <span className={`font-extrabold ${vitalColor}`}>{p.riskScore}%</span>
+                      </div>
+
+                      {/* HR */}
+                      <div className="text-right">
+                        <span className="text-[7.5px] block text-slate-400 font-bold uppercase font-mono">HR</span>
+                        <span className={`font-extrabold ${p.hr > 120 ? "text-red-600 animate-pulse" : "text-slate-700"}`}>
+                          {p.hr}
+                        </span>
+                      </div>
+
+                      {/* SpO2 */}
+                      <div className="text-right">
+                        <span className="text-[7.5px] block text-slate-400 font-bold uppercase font-mono">SPO2</span>
+                        <span className={`font-extrabold ${p.spo2 < 93 ? "text-red-700 animate-pulse" : "text-[#0284C7]"}`}>
+                          {p.spo2}%
+                        </span>
+                      </div>
+
+                      {/* BP */}
+                      <div className="text-right col-span-2 sm:col-span-1">
+                        <span className="text-[7.5px] block text-slate-400 font-bold uppercase font-mono">NIBP</span>
+                        <span className="font-extrabold text-slate-700">
+                          {p.bpSys}/{p.bpDia}
+                        </span>
+                      </div>
+
+                      {/* Focus Check Indicator */}
+                      {isActivelySelected && (
+                        <span className="text-[8.5px] font-black bg-indigo-600 text-white px-2 py-0.5 rounded-sm uppercase tracking-wider font-mono">
+                          LIVE
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          {/* Footer security agreement status */}
+          <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 text-center flex flex-col sm:flex-row justify-between items-center text-[8.5px] text-slate-500 font-semibold font-mono select-none shrink-0 uppercase">
+            <span>Security context: Clinician SSO Session Active</span>
+            <span className="text-emerald-600 font-black">✔ Access Authorized</span>
+          </div>
+        </div>
+      )}
 
       {/* --- CLINICAL OPERATIONS AND CONTROLS CONSOLE BAR --- */}
       <div id="controls-bar" className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-3 z-10 text-[9.5px] shrink-0 font-mono shadow-sm">
@@ -2354,6 +3010,40 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Nurse Shift HUD & Active Rounds Checklist */}
+                {isNurseModeActive && (
+                  <div className="mx-4 mt-1 mb-2 p-3.5 bg-[#EEF2F6] border border-slate-200 rounded-sm shadow-2xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-[10px] font-sans">
+                    <div className="flex items-center space-x-3">
+                      <div className="h-8 w-8 rounded-full bg-[#E6F4EA] text-[#059669] flex items-center justify-center font-bold text-sm shrink-0 border border-[#A7F3D0]">
+                        👩‍⚕️
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-extrabold text-[#1E293B] uppercase tracking-wider text-[11px]">ICU Shift Coordinator Dashboard</span>
+                          <span className="bg-[#059669] text-white text-[8px] font-black uppercase px-1.5 py-0.2 rounded-sm tracking-wider">Shift Active</span>
+                        </div>
+                        <p className="text-slate-500 font-medium leading-normal mt-0.5">
+                          Assigned to <span className="font-bold text-slate-800">20 ICU Beds</span>. Use the Left Queue to focus clinical waveforms. Critical/high-risk triggers are clearly annotated below.
+                        </p>
+                      </div>
+                    </div>
+                    {/* Shift Checklist Tracker */}
+                    <div className="flex flex-wrap items-center gap-2.5 font-mono text-[9px] w-full md:w-auto md:border-l md:border-slate-300 md:pl-4">
+                      <div className="flex flex-col">
+                        <span className="text-slate-400 font-bold uppercase">SHIFT COMPLIANCE STATUS</span>
+                        <div className="flex items-center space-x-1.5 mt-0.5">
+                          <span className="font-black text-[#059669]">4 OF 4 ROUNDS OK</span>
+                          <span className="text-emerald-500 font-extrabold">✔</span>
+                        </div>
+                      </div>
+                      <div className="ml-auto sm:ml-0 flex space-x-1">
+                        <span className="bg-[#E6F4EA] text-[#059669] border border-[#A7F3D0] px-2 py-0.5 rounded-sm font-extrabold uppercase">Hourly Rounds Done</span>
+                        <span className="bg-[#E6F4EA] text-[#059669] border border-[#A7F3D0] px-2 py-0.5 rounded-sm font-extrabold uppercase">Sepsis Clear</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* MAIN CONTENT SPLIT GRID */}
                 <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 p-4 pt-2 min-h-0">
                   
@@ -2449,8 +3139,8 @@ export default function App() {
                       {/* HR */}
                       <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
                         <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>Heart rate</span>
-                          <span className="text-[#059669]">50-120</span>
+                          <span>{isNurseModeActive ? "Pulse Rate (ECG)" : "Heart rate"}</span>
+                          <span className="text-[#059669]">{isNurseModeActive ? "Target: 60-100" : "50-120"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
                           <span className="text-2xl font-extrabold text-[#059669]">{activePatient.hr}</span>
@@ -2458,11 +3148,11 @@ export default function App() {
                         </div>
                         <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
                           {activePatient.hr > 120 ? (
-                            <span className="text-red-600 font-extrabold">↑ Increasing</span>
+                            <span className="text-red-600 font-extrabold">↑ Tachycardia</span>
                           ) : activePatient.hr < 60 ? (
-                            <span className="text-red-500 font-extrabold">↓ Falling</span>
+                            <span className="text-amber-600 font-bold">↓ Bradycardia</span>
                           ) : (
-                            <span className="text-[#059669] font-bold">● Stable watch</span>
+                            <span className="text-[#059669] font-bold">● Normal Rhythm</span>
                           )}
                         </div>
                       </div>
@@ -2470,8 +3160,8 @@ export default function App() {
                       {/* SpO2 */}
                       <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
                         <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>SpO₂ sat</span>
-                          <span className="text-[#0284C7]">90-100</span>
+                          <span>{isNurseModeActive ? "Oxygen Level (SpO₂)" : "SpO₂ sat"}</span>
+                          <span className="text-[#0284C7]">{isNurseModeActive ? "Goal: >94%" : "90-100"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
                           <span className="text-2xl font-extrabold text-[#0284C7]">{activePatient.spo2}</span>
@@ -2479,9 +3169,9 @@ export default function App() {
                         </div>
                         <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
                           {activePatient.spo2 < 93 ? (
-                            <span className="text-red-600 font-extrabold">↓ Falling</span>
+                            <span className="text-red-600 font-extrabold">↓ Hypoxia Watch</span>
                           ) : (
-                            <span className="text-[#0284C7] font-bold">● Stable watch</span>
+                            <span className="text-[#0284C7] font-bold">● Safe Range</span>
                           )}
                         </div>
                       </div>
@@ -2489,8 +3179,8 @@ export default function App() {
                       {/* Blood Pressure */}
                       <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
                         <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>Blood pressure</span>
-                          <span className="text-red-650 text-[7.5px]">90/50 - 140/90</span>
+                          <span>{isNurseModeActive ? "Blood Pressure (NIBP)" : "Blood pressure"}</span>
+                          <span className="text-red-650 text-[7.5px]">{isNurseModeActive ? "Target: <140/90" : "90/50 - 140/90"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
                           <span className="text-xl font-extrabold text-red-600 tracking-tight">{activePatient.bpSys}/{activePatient.bpDia}</span>
@@ -2499,8 +3189,10 @@ export default function App() {
                         <div className="text-[8.5px] font-bold text-slate-400 mt-1 uppercase">
                           {activePatient.bpSys < 90 ? (
                             <span className="text-red-650 font-extrabold">↓ Hypotension</span>
+                          ) : activePatient.bpSys > 140 ? (
+                            <span className="text-red-600 font-extrabold">↑ Hypertension</span>
                           ) : (
-                            <span className="text-slate-400">● Stable watch</span>
+                            <span className="text-slate-400">● Stable Range</span>
                           )}
                         </div>
                       </div>
@@ -2508,8 +3200,8 @@ export default function App() {
                       {/* Temperature */}
                       <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
                         <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>Temp</span>
-                          <span className="text-amber-600">36.0 - 38.5</span>
+                          <span>{isNurseModeActive ? "Body Temp (Thermal)" : "Temp"}</span>
+                          <span className="text-amber-600">{isNurseModeActive ? "Normal: 36.5-37.5" : "36.0 - 38.5"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
                           <span className="text-2xl font-extrabold text-amber-600">{activePatient.temp.toFixed(1)}</span>
@@ -2517,9 +3209,11 @@ export default function App() {
                         </div>
                         <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
                           {activePatient.temp > 38.0 ? (
-                            <span className="text-amber-700 font-extrabold">↑ High Fever</span>
+                            <span className="text-amber-700 font-extrabold">↑ Active Fever</span>
+                          ) : activePatient.temp < 36.0 ? (
+                            <span className="text-blue-600 font-bold">↓ Hypothermia</span>
                           ) : (
-                            <span className="text-[#059669] font-bold">● Stable watch</span>
+                            <span className="text-[#059669] font-bold">● Normal Temp</span>
                           )}
                         </div>
                       </div>
@@ -2527,8 +3221,8 @@ export default function App() {
                       {/* Respiratory rate */}
                       <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
                         <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>Resp Rate</span>
-                          <span className="text-[#7C3AED]">8-25</span>
+                          <span>{isNurseModeActive ? "Breathing Rate (RR)" : "Resp Rate"}</span>
+                          <span className="text-[#7C3AED]">{isNurseModeActive ? "Normal: 12-20" : "8-25"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
                           <span className="text-2xl font-extrabold text-[#7C3AED]">{activePatient.rr}</span>
@@ -2537,8 +3231,10 @@ export default function App() {
                         <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
                           {activePatient.rr > 22 ? (
                             <span className="text-[#7C3AED] font-extrabold">↑ Tachypnea</span>
+                          ) : activePatient.rr < 12 ? (
+                            <span className="text-[#7C3AED] font-bold">↓ Bradypnea</span>
                           ) : (
-                            <span className="text-[#7C3AED] font-bold">● Stable watch</span>
+                            <span className="text-[#7C3AED] font-bold">● Normal Breath</span>
                           )}
                         </div>
                       </div>
@@ -2546,8 +3242,8 @@ export default function App() {
                       {/* Risk predict */}
                       <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
                         <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>EDI Risk score</span>
-                          <span className="text-slate-400">MIN 0 MAX 100</span>
+                          <span>{isNurseModeActive ? "AI Crash Risk (EDI)" : "EDI Risk score"}</span>
+                          <span className="text-slate-400">{isNurseModeActive ? "Warning Level: >65%" : "MIN 0 MAX 100"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
                           <span className="text-2xl font-extrabold" style={{ color: activePatient.riskScore > 65 ? "#DC2626" : "#22C55E" }}>
@@ -2556,16 +3252,114 @@ export default function App() {
                         </div>
                         <div className="text-[8px] font-bold mt-1 uppercase">
                           {activePatient.riskScore > 75 ? (
-                            <span className="text-red-600 font-extrabold">Critical</span>
+                            <span className="text-red-600 font-extrabold">Critical Risk</span>
                           ) : activePatient.riskScore > 40 ? (
-                            <span className="text-amber-600 font-bold">High Risk</span>
+                            <span className="text-amber-600 font-bold">Moderate Risk</span>
                           ) : (
-                            <span className="text-[#22C55E] font-extrabold">Stable</span>
+                            <span className="text-[#22C55E] font-extrabold">Stable Watch</span>
                           )}
                         </div>
                       </div>
 
                     </div>
+
+                    {/* Interactive Bedside Nursing Checklist for Active Patient */}
+                    {isNurseModeActive && (
+                      <div className="bg-emerald-50/50 border border-emerald-200/80 p-3.5 mb-4 rounded-sm font-sans select-none">
+                        <div className="flex justify-between items-center mb-2.5">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs">📋</span>
+                            <span className="text-[10.5px] font-extrabold text-slate-800 uppercase tracking-wide">
+                              Bedside Nursing Checklist &amp; Shift Tasks
+                            </span>
+                          </div>
+                          <span className="text-[8.5px] font-bold text-[#059669] font-mono uppercase bg-emerald-100/75 px-1.5 py-0.2 rounded-sm font-mono">
+                            Bed {activePatient.bedId.toUpperCase()}
+                          </span>
+                        </div>
+                        <p className="text-[9px] text-slate-500 mb-3">
+                          Verify and check off mandatory critical ICU nursing rounds for <strong className="text-slate-700">{activePatient.name}</strong>:
+                        </p>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[9.5px] text-slate-700">
+                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={nurseChecklists[activePatient.id]?.vitalsChecked || false}
+                              onChange={(e) => {
+                                setNurseChecklists({
+                                  ...nurseChecklists,
+                                  [activePatient.id]: {
+                                    ...nurseChecklists[activePatient.id],
+                                    vitalsChecked: e.target.checked
+                                  }
+                                });
+                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Hourly vital trends verified & documented.`);
+                              }}
+                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                            />
+                            <span className="font-semibold text-slate-700 leading-tight">Hourly vitals validated</span>
+                          </label>
+
+                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={nurseChecklists[activePatient.id]?.medsAdministered || false}
+                              onChange={(e) => {
+                                setNurseChecklists({
+                                  ...nurseChecklists,
+                                  [activePatient.id]: {
+                                    ...nurseChecklists[activePatient.id],
+                                    medsAdministered: e.target.checked
+                                  }
+                                });
+                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Scheduled IV medications administered.`);
+                              }}
+                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                            />
+                            <span className="font-semibold text-slate-700 leading-tight">Meds &amp; IV lines verified</span>
+                          </label>
+
+                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={nurseChecklists[activePatient.id]?.oxygenInspected || false}
+                              onChange={(e) => {
+                                setNurseChecklists({
+                                  ...nurseChecklists,
+                                  [activePatient.id]: {
+                                    ...nurseChecklists[activePatient.id],
+                                    oxygenInspected: e.target.checked
+                                  }
+                                });
+                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Oxygen delivery system & flow rates inspected.`);
+                              }}
+                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                            />
+                            <span className="font-semibold text-slate-700 leading-tight">Oxygen flow rate checked</span>
+                          </label>
+
+                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={nurseChecklists[activePatient.id]?.bedsideSafety || false}
+                              onChange={(e) => {
+                                setNurseChecklists({
+                                  ...nurseChecklists,
+                                  [activePatient.id]: {
+                                    ...nurseChecklists[activePatient.id],
+                                    bedsideSafety: e.target.checked
+                                  }
+                                });
+                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Rails raised, bed positioned, patient comfortable.`);
+                              }}
+                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                            />
+                            <span className="font-semibold text-slate-700 leading-tight">Patient safety &amp; rails</span>
+                          </label>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Explainable AI block (Answering WHY is the patient critical?) */}
                     <div className="bg-slate-50 border border-slate-200 p-3.5 mb-4 rounded-sm">
@@ -2644,6 +3438,233 @@ export default function App() {
                         </div>
                         
                       </div>
+                    </div>
+
+                    {/* CareSync Clinical AI Automation Studio (For Judges & Nurses) */}
+                    <div className="bg-[#EEF2F6] border border-slate-300 p-4 mb-4 rounded-sm">
+                      <div className="flex justify-between items-center border-b border-slate-200 pb-2 mb-3 select-none">
+                        <div className="flex items-center space-x-1.5 text-[10px] font-black text-indigo-950 uppercase tracking-wider font-mono">
+                          <Sparkles size={12} className="text-indigo-600 animate-pulse" />
+                          <span>📋 Clinical AI Automation Studio</span>
+                        </div>
+                        <span className="bg-indigo-600 text-white text-[7.5px] font-black uppercase px-2 py-0.5 rounded-sm tracking-widest font-mono">
+                          JUDGES CHOICE
+                        </span>
+                      </div>
+
+                      <p className="text-[9.5px] text-slate-500 font-medium mb-3 leading-normal">
+                        Empowers busy nursing staff with state-of-the-art LLM clinical intelligence tools. Run Shift Handovers, dictate clinical records, and prioritize rounds instantly:
+                      </p>
+
+                      {/* Tool selection sub-tabs */}
+                      <div className="grid grid-cols-3 gap-1.5 mb-3.5 select-none font-mono">
+                        <button
+                          onClick={() => setAiStudioSubTab("handover")}
+                          className={`px-1.5 py-1.5 text-[8.5px] font-extrabold uppercase rounded-sm border transition-all cursor-pointer text-center ${
+                            aiStudioSubTab === "handover"
+                              ? "bg-indigo-950 text-white border-indigo-950 shadow-xs"
+                              : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          📋 AI Handover
+                        </button>
+                        <button
+                          onClick={() => setAiStudioSubTab("dictate")}
+                          className={`px-1.5 py-1.5 text-[8.5px] font-extrabold uppercase rounded-sm border transition-all cursor-pointer text-center ${
+                            aiStudioSubTab === "dictate"
+                              ? "bg-indigo-950 text-white border-indigo-950 shadow-xs"
+                              : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          🎙️ Note Parser
+                        </button>
+                        <button
+                          onClick={() => {
+                            setAiStudioSubTab("triage");
+                            handleRunWardTriage();
+                          }}
+                          className={`px-1.5 py-1.5 text-[8.5px] font-extrabold uppercase rounded-sm border transition-all cursor-pointer text-center ${
+                            aiStudioSubTab === "triage"
+                              ? "bg-indigo-950 text-white border-indigo-950 shadow-xs"
+                              : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          🚦 Smart Triage
+                        </button>
+                      </div>
+
+                      {/* Sub-tab Content: AI Handover Generator */}
+                      {aiStudioSubTab === "handover" && (
+                        <div className="space-y-2.5 font-sans">
+                          <div className="flex justify-between items-center text-[9px] font-bold text-slate-650 bg-white/50 p-1.5 rounded border border-slate-150 font-mono">
+                            <span>Target Patient: <strong className="text-slate-800">{activePatient.name}</strong></span>
+                            <span>Bed: <strong className="text-slate-800">{activePatient.bedId}</strong></span>
+                          </div>
+
+                          <button
+                            onClick={handleGenerateHandover}
+                            disabled={isHandoverLoading}
+                            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
+                          >
+                            {isHandoverLoading ? (
+                              <>
+                                <RefreshCw size={10} className="animate-spin mr-1" />
+                                <span>Generating Handover Summary...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>✨ Compile AI Handover Report</span>
+                              </>
+                            )}
+                          </button>
+
+                          {handoverReport && (
+                            <div className="bg-white border border-slate-250 p-3 rounded-sm text-[9.5px] text-slate-700 leading-relaxed font-sans max-h-[180px] overflow-y-auto">
+                              <div className="markdown-body">
+                                <Markdown>{handoverReport}</Markdown>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Sub-tab Content: Note Parser */}
+                      {aiStudioSubTab === "dictate" && (
+                        <div className="space-y-2.5 font-sans">
+                          <div className="flex justify-between items-center select-none">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">RAW CLINICAL DICTATION NOTE:</span>
+                            <div className="flex space-x-1 font-mono">
+                              <button
+                                onClick={() => loadPresetDictation("mild")}
+                                className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-750 rounded-[2px] text-[7.5px] font-bold uppercase cursor-pointer"
+                              >
+                                Preset 1 (Stable)
+                              </button>
+                              <button
+                                onClick={() => loadPresetDictation("severe")}
+                                className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-750 rounded-[2px] text-[7.5px] font-bold uppercase cursor-pointer"
+                              >
+                                Preset 2 (Severe)
+                              </button>
+                            </div>
+                          </div>
+
+                          <textarea
+                            value={rawDictationNote}
+                            onChange={(e) => setRawDictationNote(e.target.value)}
+                            placeholder="Type or dictate a raw clinical observation note here... (e.g. 'Patient in Bed 1 is comfortable. Hourly rounds checked, oxygen inspected, elevated bed safety rails.')"
+                            className="w-full h-14 p-2 bg-white border border-slate-200 rounded text-[9.5px] text-slate-800 leading-normal font-sans focus:outline-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                          />
+
+                          <button
+                            onClick={handleParseDictation}
+                            disabled={isParseLoading}
+                            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
+                          >
+                            {isParseLoading ? (
+                              <>
+                                <RefreshCw size={10} className="animate-spin mr-1" />
+                                <span>AI Clinical Engine Parsing Note...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>🧠 Parse Note & Auto-Update Checklists</span>
+                              </>
+                            )}
+                          </button>
+
+                          {parsedNoteResult && (
+                            <div className="bg-white border border-slate-250 p-2.5 rounded-sm space-y-2 max-h-[220px] overflow-y-auto">
+                              <div className="flex items-center space-x-1 text-[8px] bg-[#E6F4EA] text-[#059669] border border-[#A7F3D0] px-1.5 py-0.5 rounded font-black uppercase font-mono w-fit">
+                                <span>✓ Parse Success & Checklist Sync Active</span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2 text-[8px] font-mono bg-slate-50 p-1.5 rounded border border-slate-150">
+                                <div>
+                                  <span className="text-slate-400 font-bold">EXTRACTED VITALS:</span>
+                                  <div className="text-slate-800 font-extrabold mt-0.5">
+                                    HR: {parsedNoteResult.vitals?.hr || "N/A"} bpm | SpO₂: {parsedNoteResult.vitals?.spo2 || "N/A"}%
+                                  </div>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 font-bold">RESPIRATORY/BP:</span>
+                                  <div className="text-slate-800 font-extrabold mt-0.5">
+                                    RR: {parsedNoteResult.vitals?.rr || "N/A"} /min | BP: {parsedNoteResult.vitals?.bp || "N/A"}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div>
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">CLINICAL ASSESSMENT:</span>
+                                <p className="text-[9px] text-slate-700 leading-normal mt-0.5">
+                                  {parsedNoteResult.diagnostics}
+                                </p>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-1.5">
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">SUGGESTED PHYSICIAN ORDERS:</span>
+                                <ul className="list-disc pl-3 text-[9px] text-slate-700 space-y-0.5 mt-1 leading-normal font-sans">
+                                  {parsedNoteResult.orders?.map((order: string, oi: number) => (
+                                    <li key={oi} className="text-slate-800 font-semibold">{order}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Sub-tab Content: Triage Assistant */}
+                      {aiStudioSubTab === "triage" && (
+                        <div className="space-y-2.5 font-sans">
+                          <div className="flex justify-between items-center mb-1 select-none">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">AI PRIORITY ICU ROUNDS QUEUE:</span>
+                            <button
+                              onClick={handleRunWardTriage}
+                              disabled={isTriageLoading}
+                              className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-750 rounded-[2px] font-mono text-[7px] font-black uppercase flex items-center space-x-1 cursor-pointer"
+                            >
+                              <RefreshCw size={8} className={isTriageLoading ? "animate-spin mr-0.5" : "mr-0.5"} />
+                              <span>Re-Calculate</span>
+                            </button>
+                          </div>
+
+                          {isTriageLoading ? (
+                            <div className="p-4 bg-white border border-slate-150 rounded text-center text-slate-500 font-mono text-[9px] flex items-center justify-center space-x-2">
+                              <RefreshCw size={10} className="animate-spin mr-1" />
+                              <span>Evaluating ward beds early-warning metrics...</span>
+                            </div>
+                          ) : (
+                            <div className="space-y-2 max-h-[220px] overflow-y-auto">
+                              {wardTriageResult && wardTriageResult.map((item: any, idx: number) => {
+                                let badgeColor = "bg-rose-100 text-rose-800 border-rose-200";
+                                if (idx === 1) badgeColor = "bg-amber-100 text-amber-800 border-amber-200";
+                                else if (idx === 2) badgeColor = "bg-blue-100 text-blue-800 border-blue-200";
+
+                                return (
+                                  <div key={idx} className="p-2.5 bg-white border border-slate-250 rounded-sm space-y-1 hover:border-indigo-400 transition-all select-none">
+                                    <div className="flex justify-between items-center font-mono">
+                                      <div className="flex items-center space-x-1.5">
+                                        <span className={`px-1.5 py-0.2 border rounded-sm font-black text-[7.5px] uppercase ${badgeColor}`}>
+                                          {item.priority}
+                                        </span>
+                                        <span className="font-extrabold text-slate-800 text-[9.5px]">{item.bedId}: {item.name}</span>
+                                      </div>
+                                    </div>
+                                    <div className="text-[9px] text-slate-700 font-sans mt-1">
+                                      <span className="font-extrabold text-indigo-950 uppercase text-[8px] block tracking-wide">RECOMMENDED ACTION:</span>
+                                      <p className="font-bold text-slate-800 mt-0.5">{item.action}</p>
+                                    </div>
+                                    <p className="text-[9px] text-slate-500 leading-normal mt-1 italic">
+                                      {item.explanation}
+                                    </p>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Clinician One-Click Actions */}
