@@ -26,6 +26,7 @@ import { PatientCompanion } from "./components/PatientCompanion";
 import { Patient, getPatientMetrics, getExplainableAIReason } from "./types";
 import { initialPatients } from "./data";
 import Markdown from "react-markdown";
+import { jsPDF } from "jspdf";
 
 // --- CLIENT-SIDE CSV PARSING & DATASET SCHEMA CLARIFIER ENGINE ---
 function parseCSVLine(line: string): string[] {
@@ -413,11 +414,129 @@ export default function App() {
   const [aiStudioSubTab, setAiStudioSubTab] = useState<"handover" | "dictate" | "triage">("handover");
   const [handoverReport, setHandoverReport] = useState<string>("");
   const [isHandoverLoading, setIsHandoverLoading] = useState<boolean>(false);
+  
+  const handleDownloadHandoverPDF = () => {
+    if (!handoverReport) return;
+    
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    const maxLineWidth = pageWidth - margin * 2;
+    
+    // Set doc title / styling
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(18);
+    doc.setTextColor(15, 23, 42); // slate-900 / dark navy
+    doc.text("CareSync™ Clinical AI Handover Report", margin, 22);
+    
+    // Draw header accent bar
+    doc.setDrawColor(2, 132, 199); // custom teal/sky-600
+    doc.setLineWidth(1.5);
+    doc.line(margin, 26, pageWidth - margin, 26);
+    
+    // Patient details box
+    doc.setFillColor(248, 250, 252); // slate-50
+    doc.rect(margin, 30, maxLineWidth, 24, "F");
+    doc.setDrawColor(226, 232, 240); // slate-200
+    doc.setLineWidth(0.5);
+    doc.rect(margin, 30, maxLineWidth, 24, "S");
+    
+    doc.setFontSize(9);
+    doc.setFont("Helvetica", "bold");
+    doc.setTextColor(71, 85, 105); // slate-600
+    doc.text("PATIENT NAME:", margin + 5, 36);
+    doc.text("WARD LOCATION:", margin + 5, 42);
+    doc.text("GENERATED ON:", margin + 5, 48);
+    
+    doc.setFont("Helvetica", "normal");
+    doc.setTextColor(15, 23, 42); // slate-900
+    doc.text(activePatient.name.toUpperCase(), margin + 42, 36);
+    doc.text(`BED ${activePatient.bedId.toUpperCase()}`, margin + 42, 42);
+    doc.text(new Date().toLocaleString(), margin + 42, 48);
+    
+    // Content section
+    let currentY = 62;
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(2, 132, 199);
+    doc.text("CLINICAL SUMMARIZED HANDOVER REPORT", margin, currentY);
+    currentY += 8;
+    
+    // Clean markdown format a bit
+    const cleanLines = handoverReport
+      .split("\n")
+      .map(line => {
+        let cleaned = line.replace(/^\s*#+\s*/, "");
+        cleaned = cleaned.replace(/\*\*(.*?)\*\*/g, "$1");
+        cleaned = cleaned.replace(/\*(.*?)\*/g, "$1");
+        cleaned = cleaned.replace(/`(.*?)`/g, "$1");
+        return cleaned;
+      });
+    
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(51, 65, 85); // slate-700
+    
+    for (const rawLine of cleanLines) {
+      if (rawLine.trim() === "") {
+        currentY += 4;
+        continue;
+      }
+      
+      const isHeading = rawLine.startsWith("RECIPIENT") || 
+                        rawLine.startsWith("SBAR") || 
+                        rawLine.startsWith("RECOMMENDATIONS") ||
+                        rawLine.startsWith("CLINICAL SUMMARY") ||
+                        rawLine.startsWith("ACTIVE PROTOCOLS") ||
+                        rawLine.startsWith("SITUATION") ||
+                        rawLine.startsWith("BACKGROUND") ||
+                        rawLine.startsWith("ASSESSMENT") ||
+                        rawLine.startsWith("###");
+                        
+      if (isHeading) {
+        currentY += 3;
+        doc.setFont("Helvetica", "bold");
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(10.5);
+      } else {
+        doc.setFont("Helvetica", "normal");
+        doc.setTextColor(51, 65, 85);
+        doc.setFontSize(9.5);
+      }
+      
+      const splitLines = doc.splitTextToSize(rawLine, maxLineWidth);
+      for (const splitLine of splitLines) {
+        if (currentY > pageHeight - 20) {
+          // Add footer for existing page
+          doc.setFont("Helvetica", "italic");
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text("Page " + doc.getNumberOfPages() + " | Powered by CareSync™ CDS AI", margin, pageHeight - 10);
+          
+          doc.addPage();
+          currentY = 20;
+        }
+        doc.text(splitLine, margin, currentY);
+        currentY += 5.5;
+      }
+      currentY += 1.5;
+    }
+    
+    // Add final footer
+    doc.setFont("Helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    doc.text("Page " + doc.getNumberOfPages() + " | Powered by CareSync™ CDS AI", margin, pageHeight - 10);
+    
+    doc.save(`CareSync_Handover_Bed_${activePatient.bedId.toUpperCase()}_${activePatient.name.replace(/\s+/g, "_")}.pdf`);
+  };
   const [rawDictationNote, setRawDictationNote] = useState<string>("");
   const [isParseLoading, setIsParseLoading] = useState<boolean>(false);
   const [parsedNoteResult, setParsedNoteResult] = useState<any | null>(null);
   const [isTriageLoading, setIsTriageLoading] = useState<boolean>(false);
   const [wardTriageResult, setWardTriageResult] = useState<any[] | null>(null);
+  const [extendedViewType, setExtendedViewType] = useState<"handover" | "dictate" | "triage" | null>(null);
 
   // --- Real-Time Critical Escalation Popup States ---
   const [activeEscalationPopup, setActiveEscalationPopup] = useState<{
@@ -2273,6 +2392,145 @@ export default function App() {
         }
       `}</style>
 
+      {/* --- CLINICAL AI AUTOMATION STUDIO EXTENDED VIEW MODAL --- */}
+      {extendedViewType && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in font-sans">
+          <div className="bg-white border-2 border-custom-navy rounded-lg shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[85vh] animate-scale-up">
+            
+            {/* Header */}
+            <div className="bg-custom-navy text-white px-4 py-3 flex items-center justify-between select-none">
+              <div className="flex items-center space-x-2">
+                <Sparkles size={14} className="text-custom-teal animate-pulse" />
+                <span className="font-extrabold text-[12px] uppercase tracking-wider font-mono">
+                  {extendedViewType === "handover" && "📋 Clinical AI Handover - Extended Report"}
+                  {extendedViewType === "dictate" && "🎙️ AI Clinical Note Parser - Detailed Analytics"}
+                  {extendedViewType === "triage" && "🚦 AI Smart Triage - Full Priority Queue"}
+                </span>
+              </div>
+              <button
+                onClick={() => setExtendedViewType(null)}
+                className="text-white/80 hover:text-white hover:bg-white/10 px-2 py-1 rounded text-xs font-bold cursor-pointer transition-all"
+              >
+                ✕ CLOSE
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 flex-1 overflow-y-auto space-y-4">
+              {extendedViewType === "handover" && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-650 bg-[#EEF2F6] p-2 rounded border border-slate-200 font-mono">
+                    <span>Patient Profile: <strong className="text-slate-800">{activePatient.name}</strong></span>
+                    <span>Location: <strong className="text-slate-800">{activePatient.bedId.toUpperCase()}</strong></span>
+                  </div>
+                  <div className="bg-white border border-slate-200 p-4 rounded text-[11.5px] text-slate-700 leading-relaxed font-sans">
+                    <div className="markdown-body">
+                      <Markdown>{handoverReport}</Markdown>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {extendedViewType === "dictate" && parsedNoteResult && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-650 bg-[#EEF2F6] p-2 rounded border border-slate-200 font-mono">
+                    <span>Extracted Patient: <strong className="text-slate-800">{activePatient.name}</strong></span>
+                    <span>Reference Bed: <strong className="text-slate-800">{activePatient.bedId.toUpperCase()}</strong></span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-[10px] font-mono bg-emerald-50/40 p-3 rounded-md border border-[#A7F3D0]/60">
+                    <div>
+                      <span className="text-slate-400 font-bold">EXTRACTED VITALS:</span>
+                      <div className="text-slate-900 font-extrabold text-[11px] mt-1">
+                        HR: {parsedNoteResult.vitals?.hr || "N/A"} bpm | SpO₂: {parsedNoteResult.vitals?.spo2 || "N/A"}%
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold">RESPIRATORY / BP:</span>
+                      <div className="text-slate-900 font-extrabold text-[11px] mt-1">
+                        RR: {parsedNoteResult.vitals?.rr || "N/A"} /min | BP: {parsedNoteResult.vitals?.bp || "N/A"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide font-mono">CLINICAL ASSESSMENT DIAGNOSIS:</span>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded text-[11.5px] text-slate-750 leading-relaxed">
+                      {parsedNoteResult.diagnostics}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide font-mono">SUGGESTED PHYSICIAN ORDERS:</span>
+                    <ul className="list-disc pl-5 text-[11px] text-slate-700 space-y-1 bg-slate-50 border border-slate-200 p-3 rounded font-sans">
+                      {parsedNoteResult.orders?.map((order: string, oi: number) => (
+                        <li key={oi} className="text-slate-800 font-semibold">{order}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {extendedViewType === "triage" && wardTriageResult && (
+                <div className="space-y-3">
+                  <div className="text-[10px] font-bold text-slate-650 bg-[#EEF2F6] p-2 rounded border border-slate-200 font-mono flex justify-between items-center">
+                    <span>Central Ward Beds Calculated Priorities</span>
+                    <span className="bg-custom-teal text-white text-[7.5px] px-1.5 py-0.5 rounded uppercase font-black">AI Orchestrator</span>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {wardTriageResult.map((item: any, idx: number) => {
+                      let badgeColor = "bg-rose-100 text-rose-800 border-rose-200";
+                      if (idx === 1) badgeColor = "bg-amber-100 text-amber-800 border-amber-200";
+                      else if (idx === 2) badgeColor = "bg-blue-100 text-blue-800 border-blue-200";
+
+                      return (
+                        <div key={idx} className="p-3 bg-white border-2 border-slate-200 rounded-md space-y-1.5 hover:border-indigo-400 transition-all select-none">
+                          <div className="flex justify-between items-center font-mono">
+                            <div className="flex items-center space-x-2">
+                              <span className={`px-2 py-0.5 border rounded-sm font-black text-[8px] uppercase ${badgeColor}`}>
+                                {item.priority}
+                              </span>
+                              <span className="font-extrabold text-slate-800 text-[10.5px]">{item.bedId}: {item.name}</span>
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-slate-750 font-sans mt-1">
+                            <span className="font-extrabold text-indigo-950 uppercase text-[8.5px] block tracking-wide">RECOMMENDED BEDSIDE ACTION:</span>
+                            <p className="font-bold text-slate-800 mt-0.5">{item.action}</p>
+                          </div>
+                          <p className="text-[10px] text-slate-500 leading-normal mt-1 italic font-sans">
+                            {item.explanation}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex justify-end space-x-2">
+              {extendedViewType === "handover" && (
+                <button
+                  onClick={handleDownloadHandoverPDF}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-black uppercase text-[10px] rounded-md transition-all cursor-pointer font-mono flex items-center space-x-1"
+                >
+                  <span>📥 Download PDF Report</span>
+                </button>
+              )}
+              <button
+                onClick={() => setExtendedViewType(null)}
+                className="px-4 py-2 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[10px] rounded-md transition-all cursor-pointer font-mono"
+              >
+                Acknowledge &amp; Close View
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* --- CLINICAL ESCALATION POPUP ALERTS OVERLAY --- */}
       {activeEscalationPopup && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/65 backdrop-blur-xs p-4 animate-fade-in font-sans">
@@ -3601,9 +3859,23 @@ export default function App() {
                           </button>
 
                           {handoverReport && (
-                            <div className="bg-white border border-slate-250 p-3 rounded-sm text-[9.5px] text-slate-700 leading-relaxed font-sans max-h-[180px] overflow-y-auto">
-                              <div className="markdown-body">
-                                <Markdown>{handoverReport}</Markdown>
+                            <div className="space-y-2">
+                              <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-sm text-[9.5px] text-slate-650 line-clamp-3 leading-relaxed">
+                                {handoverReport.replace(/[#*`_-]/g, '').slice(0, 150)}...
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  onClick={() => setExtendedViewType("handover")}
+                                  className="py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
+                                >
+                                  <span>🔍 Extended View</span>
+                                </button>
+                                <button
+                                  onClick={handleDownloadHandoverPDF}
+                                  className="py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-black uppercase text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
+                                >
+                                  <span>📥 Download PDF</span>
+                                </button>
                               </div>
                             </div>
                           )}
@@ -3656,7 +3928,7 @@ export default function App() {
                           </button>
 
                           {parsedNoteResult && (
-                            <div className="bg-white border border-slate-250 p-2.5 rounded-sm space-y-2 max-h-[220px] overflow-y-auto">
+                            <div className="space-y-2">
                               <div className="flex items-center space-x-1 text-[8px] bg-[#E6F4EA] text-[#059669] border border-[#A7F3D0] px-1.5 py-0.5 rounded font-black uppercase font-mono w-fit">
                                 <span>✓ Parse Success & Checklist Sync Active</span>
                               </div>
@@ -3676,21 +3948,12 @@ export default function App() {
                                 </div>
                               </div>
 
-                              <div>
-                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">CLINICAL ASSESSMENT:</span>
-                                <p className="text-[9px] text-slate-700 leading-normal mt-0.5">
-                                  {parsedNoteResult.diagnostics}
-                                </p>
-                              </div>
-
-                              <div className="border-t border-slate-100 pt-1.5">
-                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">SUGGESTED PHYSICIAN ORDERS:</span>
-                                <ul className="list-disc pl-3 text-[9px] text-slate-700 space-y-0.5 mt-1 leading-normal font-sans">
-                                  {parsedNoteResult.orders?.map((order: string, oi: number) => (
-                                    <li key={oi} className="text-slate-800 font-semibold">{order}</li>
-                                  ))}
-                                </ul>
-                              </div>
+                              <button
+                                onClick={() => setExtendedViewType("dictate")}
+                                className="w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer text-center font-mono"
+                              >
+                                🔍 See Extended Analysis View
+                              </button>
                             </div>
                           )}
                         </div>
@@ -3717,32 +3980,29 @@ export default function App() {
                               <span>Evaluating ward beds early-warning metrics...</span>
                             </div>
                           ) : (
-                            <div className="space-y-2 max-h-[220px] overflow-y-auto">
-                              {wardTriageResult && wardTriageResult.map((item: any, idx: number) => {
-                                let badgeColor = "bg-rose-100 text-rose-800 border-rose-200";
-                                if (idx === 1) badgeColor = "bg-amber-100 text-amber-800 border-amber-200";
-                                else if (idx === 2) badgeColor = "bg-blue-100 text-blue-800 border-blue-200";
-
-                                return (
-                                  <div key={idx} className="p-2.5 bg-white border border-slate-250 rounded-sm space-y-1 hover:border-indigo-400 transition-all select-none">
-                                    <div className="flex justify-between items-center font-mono">
-                                      <div className="flex items-center space-x-1.5">
-                                        <span className={`px-1.5 py-0.2 border rounded-sm font-black text-[7.5px] uppercase ${badgeColor}`}>
-                                          {item.priority}
-                                        </span>
-                                        <span className="font-extrabold text-slate-800 text-[9.5px]">{item.bedId}: {item.name}</span>
-                                      </div>
+                            <div className="space-y-2">
+                              {wardTriageResult && wardTriageResult.length > 0 && (
+                                <div className="p-2.5 bg-white border border-slate-250 rounded-sm space-y-1 hover:border-indigo-400 transition-all select-none">
+                                  <div className="flex justify-between items-center font-mono">
+                                    <div className="flex items-center space-x-1.5">
+                                      <span className="px-1.5 py-0.2 border rounded-sm font-black text-[7.5px] uppercase bg-rose-100 text-rose-800 border-rose-200">
+                                        {wardTriageResult[0].priority}
+                                      </span>
+                                      <span className="font-extrabold text-slate-800 text-[9.5px]">{wardTriageResult[0].bedId}: {wardTriageResult[0].name}</span>
                                     </div>
-                                    <div className="text-[9px] text-slate-700 font-sans mt-1">
-                                      <span className="font-extrabold text-indigo-950 uppercase text-[8px] block tracking-wide">RECOMMENDED ACTION:</span>
-                                      <p className="font-bold text-slate-800 mt-0.5">{item.action}</p>
-                                    </div>
-                                    <p className="text-[9px] text-slate-500 leading-normal mt-1 italic">
-                                      {item.explanation}
-                                    </p>
                                   </div>
-                                );
-                              })}
+                                  <div className="text-[9px] text-slate-700 font-sans mt-1">
+                                    <span className="font-extrabold text-indigo-950 uppercase text-[8px] block tracking-wide">RECOMMENDED ACTION:</span>
+                                    <p className="font-bold text-slate-800 mt-0.5">{wardTriageResult[0].action}</p>
+                                  </div>
+                                </div>
+                              )}
+                              <button
+                                onClick={() => setExtendedViewType("triage")}
+                                className="w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer text-center font-mono"
+                              >
+                                🔍 See Extended Triage View
+                              </button>
                             </div>
                           )}
                         </div>
