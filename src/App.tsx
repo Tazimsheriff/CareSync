@@ -536,7 +536,7 @@ export default function App() {
   const [parsedNoteResult, setParsedNoteResult] = useState<any | null>(null);
   const [isTriageLoading, setIsTriageLoading] = useState<boolean>(false);
   const [wardTriageResult, setWardTriageResult] = useState<any[] | null>(null);
-  const [extendedViewType, setExtendedViewType] = useState<"handover" | "dictate" | "triage" | null>(null);
+  const [extendedViewType, setExtendedViewType] = useState<"handover" | "dictate" | "triage" | "queue" | "cockpit" | "beds" | null>(null);
 
   // --- Real-Time Critical Escalation Popup States ---
   const [activeEscalationPopup, setActiveEscalationPopup] = useState<{
@@ -1584,6 +1584,8 @@ export default function App() {
   // Get active patient object
   const activePatient = patients.find(p => p.id === activePatientId) || patients[0];
   const { hr, spo2, bpSys: nibpSys, bpDia: nibpDia, temp, rr, co2, riskScore: ediScore } = activePatient;
+  const activeMetrics = getPatientMetrics(activePatient);
+  const activeAIExplanation = getExplainableAIReason(activePatient);
 
   const predictActivePatient = (w: Record<string, number>, b: number) => {
     if (!activePatient) return;
@@ -2401,10 +2403,13 @@ export default function App() {
             <div className="bg-custom-navy text-white px-4 py-3 flex items-center justify-between select-none">
               <div className="flex items-center space-x-2">
                 <Sparkles size={14} className="text-custom-teal animate-pulse" />
-                <span className="font-extrabold text-[12px] uppercase tracking-wider font-mono">
+                <span className="font-extrabold text-[11px] uppercase tracking-wider font-mono">
                   {extendedViewType === "handover" && "📋 Clinical AI Handover - Extended Report"}
                   {extendedViewType === "dictate" && "🎙️ AI Clinical Note Parser - Detailed Analytics"}
                   {extendedViewType === "triage" && "🚦 AI Smart Triage - Full Priority Queue"}
+                  {extendedViewType === "queue" && "📋 PRIORITY QUEUE INDEX - FULL ACTIVE LIST"}
+                  {extendedViewType === "cockpit" && `🏥 TELEMETRY COCKPIT - BED ${activePatient.bedId.toUpperCase()}`}
+                  {extendedViewType === "beds" && "📊 ICU WARD BEDS & CLINICAL STAFF MATRIX"}
                 </span>
               </div>
               <button
@@ -2504,6 +2509,481 @@ export default function App() {
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {extendedViewType === "queue" && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-650 bg-[#EEF2F6] p-2 rounded border border-slate-200 font-mono">
+                    <span>Clinical Priority Queue Index</span>
+                    <span className="bg-red-600 text-white text-[7.5px] px-1.5 py-0.5 rounded uppercase font-black animate-pulse">Live Sorting</span>
+                  </div>
+                  
+                  {/* Search bar inside the modal */}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Search queue index by name, bed, diagnosis..."
+                      value={centralHubSearchTerm}
+                      onChange={(e) => setCentralHubSearchTerm(e.target.value)}
+                      className="w-full text-[11px] p-2.5 bg-slate-50 border-2 border-custom-navy focus:outline-none focus:bg-white text-slate-800 font-mono rounded-md"
+                    />
+                  </div>
+
+                  <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                    {[...patients]
+                      .sort((a, b) => b.riskScore - a.riskScore)
+                      .filter((p) => {
+                        const searchLower = centralHubSearchTerm.toLowerCase();
+                        return p.name.toLowerCase().includes(searchLower) ||
+                               p.bedId.toLowerCase().includes(searchLower) ||
+                               p.dx.toLowerCase().includes(searchLower);
+                      })
+                      .map((p) => {
+                        const isActivelyFocused = p.id === activePatientId;
+                        let dotColor = "bg-[#22C55E]";
+                        let riskColor = "text-[#22C55E]";
+                        let cardBorder = "border-slate-200";
+                        if (p.priority === "Critical") {
+                          dotColor = "bg-[#DC2626]";
+                          riskColor = "text-[#DC2626]";
+                          if (isActivelyFocused) cardBorder = "border-[#DC2626] bg-red-50/20";
+                        } else if (p.priority === "High Risk") {
+                          dotColor = "bg-[#F97316]";
+                          riskColor = "text-[#F97316]";
+                          if (isActivelyFocused) cardBorder = "border-[#F97316] bg-amber-50/20";
+                        } else {
+                          if (isActivelyFocused) cardBorder = "border-[#2563EB] bg-blue-50/20";
+                        }
+
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              setActivePatientId(p.id);
+                              setDatasetSuccess(`Selected ${p.name} (${p.bedId}) from extended queue focus.`);
+                            }}
+                            className={`p-3 bg-white border-2 ${cardBorder} rounded-md cursor-pointer hover:border-slate-400 transition-all flex justify-between items-center`}
+                          >
+                            <div className="flex items-center space-x-3 font-mono">
+                              <span className={`h-2.5 w-2.5 rounded-full ${dotColor} ${p.priority === "Critical" ? "animate-ping" : ""}`}></span>
+                              <div>
+                                <div className="text-[11.5px] font-extrabold text-slate-800">{p.name}</div>
+                                <div className="text-[9px] text-slate-400 mt-0.5">Dx: <span className="font-bold text-slate-600">{p.dx}</span> | Age: {p.age} | Sex: {p.gender}</div>
+                              </div>
+                            </div>
+                            <div className="text-right font-mono">
+                              <span className="text-[9.5px] font-black text-red-650 uppercase bg-slate-100 border border-slate-250 px-2 py-0.5 rounded">{p.bedId}</span>
+                              <div className="text-[10px] text-slate-500 mt-1 font-bold">
+                                Risk: <span className={`font-black ${riskColor}`}>{p.riskScore}%</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {extendedViewType === "cockpit" && (
+                <div className="space-y-4">
+                  {/* Active Patient Details Banner */}
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-650 bg-[#EEF2F6] p-2.5 rounded border border-slate-200 font-mono">
+                    <span>Clinical Profile &amp; Telemetry Cockpit</span>
+                    <span className="bg-custom-teal text-white text-[7.5px] px-1.5 py-0.5 rounded uppercase font-black">Bed {activePatient.bedId.toUpperCase()}</span>
+                  </div>
+
+                  <div className="border-b border-slate-150 pb-3">
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-sm font-black text-custom-navy font-mono">{activePatient.name}</h3>
+                      <span className="text-[10px] font-mono text-slate-400">PATIENT ID: {activePatient.id}</span>
+                    </div>
+                    <div className="flex gap-3 text-[10px] text-slate-500 font-bold mt-1 font-mono">
+                      <span>Age: {activePatient.age}y</span>
+                      <span>&bull;</span>
+                      <span>Sex: {activePatient.gender}</span>
+                      <span>&bull;</span>
+                      <span>Primary Diagnosis: <b className="text-red-600 uppercase">{activePatient.dx}</b></span>
+                    </div>
+                  </div>
+
+                  {/* Vitals Grid inside the modal */}
+                  <div className="grid grid-cols-3 gap-2.5 font-mono text-slate-800">
+                    {/* HR */}
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex flex-col justify-between">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase">Heart Rate</span>
+                      <div className="flex items-baseline justify-between mt-0.5">
+                        <span className="text-lg font-black text-custom-teal">{activePatient.hr}</span>
+                        <span className="text-[8px] text-slate-400 font-bold">BPM</span>
+                      </div>
+                    </div>
+                    {/* SpO2 */}
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex flex-col justify-between">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase">Oxygen Sat</span>
+                      <div className="flex items-baseline justify-between mt-0.5">
+                        <span className="text-lg font-black text-sky-750">{activePatient.spo2}%</span>
+                      </div>
+                    </div>
+                    {/* BP */}
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex flex-col justify-between">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase">Blood Pressure</span>
+                      <div className="flex items-baseline justify-between mt-0.5">
+                        <span className="text-base font-black text-rose-650 tracking-tight">{activePatient.bpSys}/{activePatient.bpDia}</span>
+                        <span className="text-[8px] text-slate-400 font-bold">mmHg</span>
+                      </div>
+                    </div>
+                    {/* Temp */}
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex flex-col justify-between">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase">Temperature</span>
+                      <div className="flex items-baseline justify-between mt-0.5">
+                        <span className="text-lg font-black text-amber-600">{activePatient.temp.toFixed(1)}°C</span>
+                      </div>
+                    </div>
+                    {/* RR */}
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex flex-col justify-between">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase">Respiration</span>
+                      <div className="flex items-baseline justify-between mt-0.5">
+                        <span className="text-lg font-black text-purple-650">{activePatient.rr}/min</span>
+                      </div>
+                    </div>
+                    {/* Risk */}
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex flex-col justify-between">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase">AI Crash Risk</span>
+                      <div className="flex items-baseline justify-between mt-0.5">
+                        <span className="text-lg font-black" style={{ color: activePatient.riskScore > 65 ? "#DC2626" : "#14967f" }}>
+                          {activePatient.riskScore}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Explainable AI Block */}
+                  <div className="bg-white border-2 border-custom-teal p-3 rounded-md shadow-sm">
+                    <div className="flex items-center space-x-1.5 text-[9px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">
+                      <Sparkles size={11} className="text-custom-teal" />
+                      <span>AI Clinical Guard Insights</span>
+                    </div>
+                    <ul className="space-y-1 mt-1.5 pl-3 text-[9.5px] text-slate-650 list-disc font-sans leading-relaxed">
+                      {activeAIExplanation.map((reason, ri) => (
+                        <li key={ri} className="text-slate-750">
+                          {reason}
+                        </li>
+                      ))}
+                      {activeMetrics.spo2Deteriorating && (
+                        <li className="text-[#D97706] font-bold">
+                          ⚠ TREND ALERT: SpO₂ history sequence exhibits hypoxic deterioration: {activePatient.spo2History.join("% → ")}%.
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+
+                  {/* Bedside Nursing Checklist (Editable in modal) */}
+                  <div className="bg-emerald-50/50 border border-emerald-200 p-3 rounded-md font-sans select-none">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[9.5px] font-extrabold text-slate-805 uppercase tracking-wide font-mono">📋 Bedside Nursing Checklist</span>
+                      <span className="text-[8px] bg-emerald-100 text-[#059669] px-1.5 rounded-sm font-bold uppercase font-mono">Rounds Verification</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[9px] text-slate-750">
+                      <label className="flex items-center space-x-2 p-1.5 bg-white border border-slate-150 rounded cursor-pointer hover:border-emerald-300">
+                        <input 
+                          type="checkbox" 
+                          checked={nurseChecklists[activePatient.id]?.vitalsChecked || false}
+                          onChange={(e) => {
+                            setNurseChecklists({
+                              ...nurseChecklists,
+                              [activePatient.id]: { ...nurseChecklists[activePatient.id], vitalsChecked: e.target.checked }
+                            });
+                            setDatasetSuccess(`Updated ${activePatient.name} bedside log: Hourly vital trends verified & documented.`);
+                          }}
+                          className="accent-emerald-600 h-3 w-3 rounded cursor-pointer"
+                        />
+                        <span className="font-semibold leading-tight">Hourly vitals validated</span>
+                      </label>
+                      <label className="flex items-center space-x-2 p-1.5 bg-white border border-slate-150 rounded cursor-pointer hover:border-emerald-300">
+                        <input 
+                          type="checkbox" 
+                          checked={nurseChecklists[activePatient.id]?.medsAdministered || false}
+                          onChange={(e) => {
+                            setNurseChecklists({
+                              ...nurseChecklists,
+                              [activePatient.id]: { ...nurseChecklists[activePatient.id], medsAdministered: e.target.checked }
+                            });
+                            setDatasetSuccess(`Updated ${activePatient.name} bedside log: Scheduled IV medications administered.`);
+                          }}
+                          className="accent-emerald-600 h-3 w-3 rounded cursor-pointer"
+                        />
+                        <span className="font-semibold leading-tight">Meds &amp; IV verified</span>
+                      </label>
+                      <label className="flex items-center space-x-2 p-1.5 bg-white border border-slate-150 rounded cursor-pointer hover:border-emerald-300">
+                        <input 
+                          type="checkbox" 
+                          checked={nurseChecklists[activePatient.id]?.oxygenInspected || false}
+                          onChange={(e) => {
+                            setNurseChecklists({
+                              ...nurseChecklists,
+                              [activePatient.id]: { ...nurseChecklists[activePatient.id], oxygenInspected: e.target.checked }
+                            });
+                            setDatasetSuccess(`Updated ${activePatient.name} bedside log: Oxygen delivery system & flow rates inspected.`);
+                          }}
+                          className="accent-emerald-600 h-3 w-3 rounded cursor-pointer"
+                        />
+                        <span className="font-semibold leading-tight">Oxygen flow rate checked</span>
+                      </label>
+                      <label className="flex items-center space-x-2 p-1.5 bg-white border border-slate-150 rounded cursor-pointer hover:border-emerald-300">
+                        <input 
+                          type="checkbox" 
+                          checked={nurseChecklists[activePatient.id]?.bedsideSafety || false}
+                          onChange={(e) => {
+                            setNurseChecklists({
+                              ...nurseChecklists,
+                              [activePatient.id]: { ...nurseChecklists[activePatient.id], bedsideSafety: e.target.checked }
+                            });
+                            setDatasetSuccess(`Updated ${activePatient.name} bedside log: Rails raised, bed positioned.`);
+                          }}
+                          className="accent-emerald-600 h-3 w-3 rounded cursor-pointer"
+                        />
+                        <span className="font-semibold leading-tight">Patient safety &amp; rails</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Trend Timeline */}
+                  <div className="bg-white border border-slate-200 p-3 rounded-sm font-mono text-[9px]">
+                    <div className="text-slate-400 font-bold uppercase tracking-wider mb-2">Clinical Trend Timeline</div>
+                    <div className="relative pl-4 border-l-2 border-slate-200 ml-1 space-y-2 pb-1 leading-tight text-slate-650">
+                      <div className="relative">
+                        <span className="absolute -left-[21px] top-0.5 h-1.5 w-1.5 rounded-full bg-slate-350"></span>
+                        <div className="flex justify-between font-bold text-slate-850"><span>12:00</span> <span className="font-normal text-slate-400">Baseline Watch</span></div>
+                        <p className="mt-0.5 text-slate-500">Patient was stable. SpO₂ ~ {Math.min(100, activePatient.spo2 + 6)}%, HR ~ {activePatient.hr - 15} bpm.</p>
+                      </div>
+                      <div className="relative">
+                        <span className="absolute -left-[21px] top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+                        <div className="flex justify-between font-bold text-amber-600"><span>12:10</span> <span>Deterioration Slope</span></div>
+                        <p className="mt-0.5 text-slate-500">SpO₂ sequence exhibits downward trend. Heart Rate slightly elevated.</p>
+                      </div>
+                      <div className="relative">
+                        <span className="absolute -left-[21px] top-0.5 h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                        <div className="flex justify-between font-bold text-red-650"><span>12:25</span> <span>Alarm Triggered</span></div>
+                        <p className="mt-0.5 text-slate-800 font-semibold">Active vitals recorded: SpO₂ {activePatient.spo2}%, HR {activePatient.hr} bpm, BP {activePatient.bpSys}/{activePatient.bpDia} mmHg.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* CareSync Clinical AI Automation Studio */}
+                  <div className="bg-white border-2 border-custom-navy p-3 rounded-md shadow-sm">
+                    <div className="flex justify-between items-center border-b border-slate-200 pb-1.5 mb-2 select-none">
+                      <div className="flex items-center space-x-1 font-black text-custom-navy uppercase tracking-wider font-mono text-[9.5px]">
+                        <Sparkles size={11} className="text-custom-teal animate-pulse" />
+                        <span>📋 Clinical AI Automation Studio</span>
+                      </div>
+                      <span className="bg-custom-teal text-white text-[7px] font-black uppercase px-1.5 py-0.2 rounded-sm tracking-widest font-mono">AI ASSIST</span>
+                    </div>
+
+                    {/* Tool selection sub-tabs inside modal */}
+                    <div className="grid grid-cols-3 gap-1 mb-2 font-mono">
+                      <button
+                        onClick={() => setAiStudioSubTab("handover")}
+                        className={`py-1 text-[8px] font-black uppercase rounded-sm border cursor-pointer text-center ${
+                          aiStudioSubTab === "handover" ? "bg-custom-navy text-white border-custom-navy" : "bg-white text-slate-750 border-slate-200"
+                        }`}
+                      >
+                        📋 AI Handover
+                      </button>
+                      <button
+                        onClick={() => setAiStudioSubTab("dictate")}
+                        className={`py-1 text-[8px] font-black uppercase rounded-sm border cursor-pointer text-center ${
+                          aiStudioSubTab === "dictate" ? "bg-custom-navy text-white border-custom-navy" : "bg-white text-slate-750 border-slate-200"
+                        }`}
+                      >
+                        🎙️ Note Parser
+                      </button>
+                      <button
+                        onClick={() => { setAiStudioSubTab("triage"); handleRunWardTriage(); }}
+                        className={`py-1 text-[8px] font-black uppercase rounded-sm border cursor-pointer text-center ${
+                          aiStudioSubTab === "triage" ? "bg-custom-navy text-white border-custom-navy" : "bg-white text-slate-750 border-slate-200"
+                        }`}
+                      >
+                        🚦 Smart Triage
+                      </button>
+                    </div>
+
+                    {/* Compact Inner Tools View */}
+                    <div className="p-2.5 bg-slate-50 rounded-sm border border-slate-200 text-[10px] text-slate-750">
+                      {aiStudioSubTab === "handover" && (
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center text-[8px] font-mono font-bold text-slate-500">
+                            <span>RECIPIENT SBAR HANDOVER</span>
+                            <button onClick={handleDownloadHandoverPDF} className="bg-emerald-700 text-white px-2 py-0.5 rounded text-[7.5px] uppercase font-bold hover:bg-emerald-600 transition-colors">
+                              📥 Download PDF
+                            </button>
+                          </div>
+                          {isHandoverLoading ? (
+                            <div className="text-center py-2 text-custom-teal font-mono">Generating report...</div>
+                          ) : (
+                            <div className="max-h-[150px] overflow-y-auto p-2 bg-white border border-slate-200 rounded text-[9.5px] font-sans leading-relaxed">
+                              <Markdown>{handoverReport || "No handover report generated yet. Click generate below."}</Markdown>
+                            </div>
+                          )}
+                          <button
+                            disabled={isHandoverLoading}
+                            onClick={handleGenerateHandover}
+                            className="w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8px] rounded transition-all cursor-pointer text-center font-mono"
+                          >
+                            Generate SBAR Handover
+                          </button>
+                        </div>
+                      )}
+
+                      {aiStudioSubTab === "dictate" && (
+                        <div className="space-y-2">
+                          <div className="text-[8px] font-mono font-bold text-slate-500">AI CLINICAL NOTE PARSER</div>
+                          <textarea
+                            value={rawDictationNote}
+                            onChange={(e) => setRawDictationNote(e.target.value)}
+                            className="w-full text-[9.5px] p-1.5 bg-white border border-slate-250 rounded font-sans h-[60px]"
+                            placeholder="Type raw observation note..."
+                          />
+                          <button
+                            onClick={handleParseDictation}
+                            className="w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8px] rounded transition-all cursor-pointer text-center font-mono"
+                          >
+                            {isParseLoading ? "Analyzing..." : "Parse & Sync Bedside Checklist"}
+                          </button>
+                        </div>
+                      )}
+
+                      {aiStudioSubTab === "triage" && (
+                        <div className="space-y-2">
+                          <div className="text-[8px] font-mono font-bold text-slate-500">AI SMART TRIAGE DETECTOR</div>
+                          {isTriageLoading ? (
+                            <div className="text-center py-2 text-custom-teal font-mono">Analyzing priority metrics...</div>
+                          ) : (
+                            <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
+                              {wardTriageResult?.map((item: any, idx: number) => (
+                                <div key={idx} className="p-1.5 bg-white border border-slate-200 rounded">
+                                  <div className="flex justify-between text-[9px] font-bold font-mono">
+                                    <span>{item.bedId}: {item.name}</span>
+                                    <span className="text-rose-700">{item.priority}</span>
+                                  </div>
+                                  <p className="text-[8.5px] mt-0.5 text-slate-650 font-sans leading-tight"><strong>Action:</strong> {item.action}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {extendedViewType === "beds" && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center text-[10px] font-bold text-slate-650 bg-[#EEF2F6] p-2 rounded border border-slate-200 font-mono font-sans">
+                    <span>ICU Central Command Ward Beds &amp; Staff Operations Matrix</span>
+                    <span className="bg-[#14967f] text-white text-[7.5px] px-1.5 py-0.5 rounded uppercase font-black font-mono">20 Live Slots</span>
+                  </div>
+
+                  {/* Central Bed Matrix Grid */}
+                  <div>
+                    <h4 className="text-[10px] font-black text-custom-navy uppercase tracking-wider font-mono mb-2">Detailed Bed Allocations</h4>
+                    <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 font-mono">
+                      {patients.map((p) => {
+                        const isFocusedOnMain = p.id === activePatientId;
+                        let bgLed = "bg-[#22C55E]";
+                        let bgCell = "bg-white border-slate-200";
+                        let borderStyle = "border-2";
+                        
+                        if (p.priority === "Critical") {
+                          bgLed = "bg-[#DC2626]";
+                          bgCell = isFocusedOnMain ? "bg-red-50 border-[#DC2626]" : "bg-white border-red-200 hover:border-[#DC2626]";
+                        } else if (p.priority === "High Risk") {
+                          bgLed = "bg-[#F97316]";
+                          bgCell = isFocusedOnMain ? "bg-amber-50 border-[#F97316]" : "bg-white border-amber-200 hover:border-[#F97316]";
+                        } else {
+                          bgCell = isFocusedOnMain ? "bg-blue-50 border-[#2563EB]" : "bg-white border-slate-200 hover:border-[#2563EB]";
+                        }
+
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              setActivePatientId(p.id);
+                              setDatasetSuccess(`Selected ${p.name} (${p.bedId}) from extended matrix.`);
+                            }}
+                            className={`p-2 flex flex-col justify-between items-center text-center h-[52px] rounded-md cursor-pointer transition-all ${bgCell} ${borderStyle}`}
+                          >
+                            <span className="text-[10.5px] font-black text-slate-800">{p.bedId.replace("Bed ", "")}</span>
+                            <span className="text-[8px] font-semibold text-slate-400 line-clamp-1 max-w-[50px]">{p.name.split(" ")[0]}</span>
+                            <span className={`h-2 w-2 rounded-full mt-1 ${bgLed} ${p.priority === "Critical" ? "animate-pulse" : ""}`}></span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Detailed Staff Roster & Dispatch Engine */}
+                  <div className="pt-2 border-t border-slate-150">
+                    <h4 className="text-[10px] font-black text-custom-navy uppercase tracking-wider font-mono mb-2">Active Shift Clinicians &amp; Workload</h4>
+                    <div className="space-y-2.5">
+                      {/* Doctor 1 */}
+                      <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-md font-mono text-[10px] text-slate-800">
+                        <div>
+                          <div className="font-extrabold text-[11px] text-slate-900">Dr. John Doe</div>
+                          <span className="text-[8px] text-slate-400 uppercase">Emergency Medicine Board Certified</span>
+                          <p className="text-[9px] text-slate-500 font-sans mt-0.5 leading-tight">Coverage: Bed 01 - Bed 05. Expert in septic shock resuscitations.</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold rounded uppercase text-[8px]">Available</span>
+                          <div className="text-[9px] text-slate-600 font-bold mt-1">2 Active Patients</div>
+                        </div>
+                      </div>
+
+                      {/* Doctor 2 */}
+                      <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-md font-mono text-[10px] text-slate-850">
+                        <div>
+                          <div className="font-extrabold text-[11px] text-slate-900">Dr. Emma Brooks</div>
+                          <span className="text-[8px] text-slate-400 uppercase">Pulmonology Specialist / Critical Care Fellow</span>
+                          <p className="text-[9px] text-slate-500 font-sans mt-0.5 leading-tight">Coverage: Bed 06 - Bed 13. Oxygen delivery &amp; airway management specialist.</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 font-bold rounded uppercase text-[8px]">Busy</span>
+                          <div className="text-[9px] text-slate-600 font-bold mt-1">8 Active Patients</div>
+                        </div>
+                      </div>
+
+                      {/* Doctor 3 */}
+                      <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-md font-mono text-[10px] text-slate-850">
+                        <div>
+                          <div className="font-extrabold text-[11px] text-slate-900">Dr. James Smith</div>
+                          <span className="text-[8px] text-slate-400 uppercase">Cardiology Specialist / Lead Attending</span>
+                          <p className="text-[9px] text-slate-500 font-sans mt-0.5 leading-tight">Coverage: Bed 14 - Bed 20. Advanced coronary telemetry specialist.</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 font-bold rounded uppercase text-[8px]">Busy</span>
+                          <div className="text-[9px] text-slate-600 font-bold mt-1">5 Active Patients</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3.5 p-3 bg-custom-ice border border-custom-teal/35 rounded-md">
+                      <div className="flex items-center space-x-1.5 font-bold text-custom-navy font-mono text-[8px] uppercase tracking-wide">
+                        <Sparkles size={11} className="text-custom-teal" />
+                        <span>AI DISPATCH &amp; WORKLOAD RE-BALANCE RECOMMENDATION</span>
+                      </div>
+                      <p className="text-[9.5px] text-custom-navy mt-1.5 leading-normal font-sans">
+                        Clinician <strong>Dr. John Doe</strong> has the lowest caseload (2 patients). We recommend routing incoming alerts or transfer requests to him to balance critical nursing hours.
+                      </p>
+                      <button
+                        onClick={() => {
+                          setDatasetSuccess(`✅ DISPATCH SUCCESS: Shift manager pager alert broadcasted to Dr. John Doe.`);
+                        }}
+                        className="mt-2 w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer text-center font-mono"
+                      >
+                        RE-BALANCE CASLOAD &amp; DISPATCH ALL ALERTS TO JOHN
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -3264,8 +3744,6 @@ export default function App() {
           {/* TAB 1: LIVE OUTPATIANCE OSCILLOSCOPE */}
           {/* TAB 1: LIVE OUTPATIANCE COCKPIT */}
           {activeTab === "live" && (() => {
-            const activeMetrics = getPatientMetrics(activePatient);
-            const activeAIExplanation = getExplainableAIReason(activePatient);
 
             return (
               <div className="flex flex-col h-full bg-[#F8FAFC]">
@@ -3384,7 +3862,7 @@ export default function App() {
                 <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 p-4 pt-2 min-h-0 animate-fade-in">
                   
                   {/* Question 2: Which patient should I see first? (Left-side queue, 3/12 cols) */}
-                  <div className={`xl:col-span-3 bg-white border-2 border-custom-navy p-3 flex flex-col h-[520px] xl:h-full rounded-md shadow-md overflow-hidden ${
+                  <div className={`xl:col-span-3 bg-white border-2 border-custom-navy p-3 flex flex-col h-fit rounded-md shadow-md ${
                     mobileLiveSubTab === "queue" ? "flex" : "hidden xl:flex"
                   }`}>
                     <div className="mb-2 shrink-0">
@@ -3393,13 +3871,14 @@ export default function App() {
                         <span className="text-[8px] font-extrabold bg-custom-teal/15 text-custom-teal px-1.5 py-0.2 rounded-sm font-mono uppercase">REAL-TIME</span>
                       </div>
                       <div className="text-[11.5px] font-black text-custom-navy mt-1">Which patient should I see first?</div>
-                      <p className="text-[9px] text-slate-500 leading-tight mt-0.5">Sorted strictly by predictive decompensation risk score.</p>
+                      <p className="text-[9px] text-slate-500 leading-tight mt-0.5 font-sans">Sorted strictly by predictive decompensation risk score.</p>
                     </div>
 
-                    {/* List Container */}
-                    <div className="flex-1 overflow-y-auto space-y-2 pr-1 pt-1">
+                    {/* Compact List Container */}
+                    <div className="space-y-2 pt-1">
                       {[...patients]
                         .sort((a, b) => b.riskScore - a.riskScore)
+                        .slice(0, 4)
                         .map((p) => {
                           const isActivelyFocused = p.id === activePatientId;
                           let dotColor = "bg-[#22C55E]";
@@ -3424,16 +3903,16 @@ export default function App() {
                                 setActivePatientId(p.id);
                                 setDatasetSuccess(`Focussed on ${p.name} (${p.bedId}) clinical status.`);
                               }}
-                              className={`p-2.5 bg-white border ${cardBorder} shadow-2xs hover:shadow-xs hover:border-slate-300 rounded-sm cursor-pointer transition-all flex flex-col justify-between`}
+                              className={`p-2 bg-white border ${cardBorder} shadow-2xs hover:shadow-xs hover:border-slate-300 rounded-sm cursor-pointer transition-all flex flex-col justify-between`}
                             >
                               <div className="flex justify-between items-start font-mono">
                                 <div className="flex items-center space-x-1.5">
                                   <span className={`h-2 w-2 rounded-full ${dotColor}`}></span>
-                                  <span className="text-[11px] font-extrabold text-slate-800 line-clamp-1">{p.name}</span>
+                                  <span className="text-[10px] font-extrabold text-slate-800 line-clamp-1">{p.name}</span>
                                 </div>
-                                <span className="text-[10px] font-bold text-red-650 uppercase font-mono">{p.bedId}</span>
+                                <span className="text-[9px] font-bold text-red-650 uppercase font-mono">{p.bedId}</span>
                               </div>
-                              <div className="flex justify-between items-center mt-2 text-[9.5px] font-mono">
+                              <div className="flex justify-between items-center mt-1.5 text-[9px] font-mono">
                                 <div>
                                   <span className="text-slate-400">Risk score: </span>
                                   <span className={`font-extrabold ${riskColor}`}>{p.riskScore}</span>
@@ -3447,10 +3926,17 @@ export default function App() {
                           );
                         })}
                     </div>
+
+                    <button
+                      onClick={() => setExtendedViewType("queue")}
+                      className="mt-3 w-full py-2 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
+                    >
+                      <span>🔍 See Extended Queue</span>
+                    </button>
                   </div>
 
                   {/* Question 3: Why is patient critical? (Center detail view, 6/12 cols) */}
-                  <div className={`xl:col-span-6 bg-white border-2 border-custom-navy p-4 rounded-md shadow-md flex flex-col overflow-y-auto ${
+                  <div className={`xl:col-span-6 bg-white border-2 border-custom-navy p-4 rounded-md shadow-md flex flex-col h-fit ${
                     mobileLiveSubTab === "cockpit" ? "flex" : "hidden xl:flex"
                   }`}>
                     <div className="border-b border-slate-200 pb-3 mb-3 shrink-0">
@@ -3603,108 +4089,10 @@ export default function App() {
 
                     </div>
 
-                    {/* Interactive Bedside Nursing Checklist for Active Patient */}
-                    {isNurseModeActive && (
-                      <div className="bg-emerald-50/50 border border-emerald-200/80 p-3.5 mb-4 rounded-sm font-sans select-none">
-                        <div className="flex justify-between items-center mb-2.5">
-                          <div className="flex items-center space-x-2">
-                            <span className="text-xs">📋</span>
-                            <span className="text-[10.5px] font-extrabold text-slate-800 uppercase tracking-wide">
-                              Bedside Nursing Checklist &amp; Shift Tasks
-                            </span>
-                          </div>
-                          <span className="text-[8.5px] font-bold text-[#059669] font-mono uppercase bg-emerald-100/75 px-1.5 py-0.2 rounded-sm font-mono">
-                            Bed {activePatient.bedId.toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="text-[9px] text-slate-500 mb-3">
-                          Verify and check off mandatory critical ICU nursing rounds for <strong className="text-slate-700">{activePatient.name}</strong>:
-                        </p>
-                        
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[9.5px] text-slate-700">
-                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={nurseChecklists[activePatient.id]?.vitalsChecked || false}
-                              onChange={(e) => {
-                                setNurseChecklists({
-                                  ...nurseChecklists,
-                                  [activePatient.id]: {
-                                    ...nurseChecklists[activePatient.id],
-                                    vitalsChecked: e.target.checked
-                                  }
-                                });
-                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Hourly vital trends verified & documented.`);
-                              }}
-                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-                            />
-                            <span className="font-semibold text-slate-700 leading-tight">Hourly vitals validated</span>
-                          </label>
-
-                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={nurseChecklists[activePatient.id]?.medsAdministered || false}
-                              onChange={(e) => {
-                                setNurseChecklists({
-                                  ...nurseChecklists,
-                                  [activePatient.id]: {
-                                    ...nurseChecklists[activePatient.id],
-                                    medsAdministered: e.target.checked
-                                  }
-                                });
-                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Scheduled IV medications administered.`);
-                              }}
-                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-                            />
-                            <span className="font-semibold text-slate-700 leading-tight">Meds &amp; IV lines verified</span>
-                          </label>
-
-                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={nurseChecklists[activePatient.id]?.oxygenInspected || false}
-                              onChange={(e) => {
-                                setNurseChecklists({
-                                  ...nurseChecklists,
-                                  [activePatient.id]: {
-                                    ...nurseChecklists[activePatient.id],
-                                    oxygenInspected: e.target.checked
-                                  }
-                                });
-                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Oxygen delivery system & flow rates inspected.`);
-                              }}
-                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-                            />
-                            <span className="font-semibold text-slate-700 leading-tight">Oxygen flow rate checked</span>
-                          </label>
-
-                          <label className="flex items-center space-x-2.5 p-1.5 bg-white border border-slate-150 rounded hover:border-emerald-300 transition-all cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={nurseChecklists[activePatient.id]?.bedsideSafety || false}
-                              onChange={(e) => {
-                                setNurseChecklists({
-                                  ...nurseChecklists,
-                                  [activePatient.id]: {
-                                    ...nurseChecklists[activePatient.id],
-                                    bedsideSafety: e.target.checked
-                                  }
-                                });
-                                setDatasetSuccess(`Updated ${activePatient.name} bedside log: Rails raised, bed positioned, patient comfortable.`);
-                              }}
-                              className="accent-emerald-600 h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-                            />
-                            <span className="font-semibold text-slate-700 leading-tight">Patient safety &amp; rails</span>
-                          </label>
-                        </div>
-                      </div>
-                    )}
-
                     {/* Explainable AI block (Answering WHY is the patient critical?) */}
-                    <div className="bg-white border-2 border-custom-teal p-3.5 mb-4 rounded-md shadow-sm">
+                    <div className="bg-white border-2 border-custom-teal p-3.5 rounded-md shadow-sm mb-3">
                       <div className="flex items-center space-x-1.5 text-[10px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">
-                        <Sparkles size={12} className="text-custom-teal" />
+                        <Sparkles size={12} className="text-custom-teal animate-pulse" />
                         <span>CareSync Explainable AI Clinical Guard</span>
                       </div>
                       
@@ -3726,288 +4114,25 @@ export default function App() {
                         )}
                         
                         {activeMetrics.spo2Deteriorating && (
-                          <li className="text-[#D97706] font-bold">
+                          <li className="text-[#D97706] font-bold font-sans">
                             ⚠ TREND ALERT: SpO₂ history sequence exhibits continuous hypoxic slope deterioration: {activePatient.spo2History.join("% → ")}%. Predictive algorithms trigger immediate warning alert.
                           </li>
                         )}
                       </ul>
 
-                      <div className="text-[9.5px] text-slate-400 font-mono mt-3 border-t border-slate-100 pt-2 flex items-center justify-between">
+                      <div className="text-[9.5px] text-slate-400 font-mono mt-2.5 border-t border-slate-100 pt-2 flex items-center justify-between">
                         <span>Routing recommendation:</span>
                         <span className="text-indigo-650 font-bold uppercase">{activeMetrics.specialist}</span>
                       </div>
                     </div>
 
-                    {/* Beautiful Clinical Timeline (Doctors love this!) */}
-                    <div className="bg-white border border-slate-200 p-3.5 mb-4 rounded-sm">
-                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mb-2">
-                         Clinical Trend Timeline
-                      </div>
-                      <div className="relative pl-4 border-l-2 border-slate-200 ml-1 space-y-3 pb-1 text-[10px] font-sans">
-                        
-                        {/* Timeline Node 1 */}
-                        <div className="relative">
-                          <span className="absolute -left-[21px] top-0.5 h-2 w-2 rounded-full border border-slate-300 bg-slate-350"></span>
-                          <div className="flex justify-between items-baseline">
-                            <span className="font-bold text-slate-800">12:00</span>
-                            <span className="text-[9px] text-slate-400 font-medium">Baseline Watch</span>
-                          </div>
-                          <p className="text-[9.5px] text-slate-500 mt-0.5 leading-tight">Patient was stable. Autonomic homeostasis maintained. SpO₂ ~ {Math.min(100, activePatient.spo2 + 6)}%, HR ~ {activePatient.hr - 15} bpm.</p>
-                        </div>
-
-                        {/* Timeline Node 2 */}
-                        <div className="relative">
-                          <span className="absolute -left-[21px] top-0.5 h-2 w-2 rounded-full border border-amber-300 bg-amber-400"></span>
-                          <div className="flex justify-between items-baseline">
-                            <span className="font-bold text-[#E65100]">12:10</span>
-                            <span className="text-[9px] text-amber-600 font-bold font-mono">Deterioration Slope</span>
-                          </div>
-                          <p className="text-[9.5px] text-slate-500 mt-0.5 leading-tight">SpO₂ level sequence recognized as continuous downward trend. Heart Rate slightly elevated to {activePatient.hr - 8} bpm.</p>
-                        </div>
-
-                        {/* Timeline Node 3 */}
-                        <div className="relative">
-                          <span className="absolute -left-[21px] top-0.5 h-2 w-2 rounded-full border border-red-300 bg-red-500 animate-pulse"></span>
-                          <div className="flex justify-between items-baseline">
-                            <span className="font-bold text-[#DC2626]">12:25</span>
-                            <span className="text-[9px] text-red-600 font-bold font-mono uppercase">Telemetry Alarm Triggered</span>
-                          </div>
-                          <p className="text-[9.5px] text-slate-650 mt-0.5 leading-tight font-semibold">
-                            Current active patient vitals recorded: SpO₂ value at {activePatient.spo2}%, heart rate {activePatient.hr} bpm, blood pressure {activePatient.bpSys}/{activePatient.bpDia} mmHg.
-                          </p>
-                        </div>
-                        
-                      </div>
-                    </div>
-
-                    {/* CareSync Clinical AI Automation Studio (For Judges & Nurses) */}
-                    <div className="bg-white border-2 border-custom-navy p-4 mb-4 rounded-md shadow-md">
-                      <div className="flex justify-between items-center border-b border-slate-200 pb-2 mb-3 select-none">
-                        <div className="flex items-center space-x-1.5 text-[10px] font-black text-custom-navy uppercase tracking-wider font-mono">
-                          <Sparkles size={12} className="text-custom-teal animate-pulse" />
-                          <span>📋 Clinical AI Automation Studio</span>
-                        </div>
-                        <span className="bg-custom-teal text-white text-[7.5px] font-black uppercase px-2 py-0.5 rounded-sm tracking-widest font-mono">
-                          AI ASSIST
-                        </span>
-                      </div>
-
-                      <p className="text-[9.5px] text-slate-500 font-medium mb-3 leading-normal font-sans">
-                        Empowers busy nursing staff with state-of-the-art AI clinical intelligence tools. Run Shift Handovers, dictate clinical records, and prioritize rounds instantly:
-                      </p>
-
-                      {/* Tool selection sub-tabs */}
-                      <div className="grid grid-cols-3 gap-1.5 mb-3.5 select-none font-mono">
-                        <button
-                          onClick={() => setAiStudioSubTab("handover")}
-                          className={`px-1.5 py-1.5 text-[8.5px] font-black uppercase rounded-sm border transition-all cursor-pointer text-center ${
-                            aiStudioSubTab === "handover"
-                              ? "bg-custom-navy text-white border-custom-navy shadow-sm"
-                              : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
-                          }`}
-                        >
-                          📋 AI Handover
-                        </button>
-                        <button
-                          onClick={() => setAiStudioSubTab("dictate")}
-                          className={`px-1.5 py-1.5 text-[8.5px] font-black uppercase rounded-sm border transition-all cursor-pointer text-center ${
-                            aiStudioSubTab === "dictate"
-                              ? "bg-custom-navy text-white border-custom-navy shadow-sm"
-                              : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
-                          }`}
-                        >
-                          🎙️ Note Parser
-                        </button>
-                        <button
-                          onClick={() => {
-                            setAiStudioSubTab("triage");
-                            handleRunWardTriage();
-                          }}
-                          className={`px-1.5 py-1.5 text-[8.5px] font-black uppercase rounded-sm border transition-all cursor-pointer text-center ${
-                            aiStudioSubTab === "triage"
-                              ? "bg-custom-navy text-white border-custom-navy shadow-sm"
-                              : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
-                          }`}
-                        >
-                          🚦 Smart Triage
-                        </button>
-                      </div>
-
-                      {/* Sub-tab Content: AI Handover Generator */}
-                      {aiStudioSubTab === "handover" && (
-                        <div className="space-y-2.5 font-sans">
-                          <div className="flex justify-between items-center text-[9px] font-bold text-slate-650 bg-white/50 p-1.5 rounded border border-slate-150 font-mono">
-                            <span>Target Patient: <strong className="text-slate-800">{activePatient.name}</strong></span>
-                            <span>Bed: <strong className="text-slate-800">{activePatient.bedId}</strong></span>
-                          </div>
-
-                          <button
-                            onClick={handleGenerateHandover}
-                            disabled={isHandoverLoading}
-                            className="w-full py-1.5 bg-custom-teal hover:bg-custom-navy text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
-                          >
-                            {isHandoverLoading ? (
-                              <>
-                                <RefreshCw size={10} className="animate-spin mr-1" />
-                                <span>Generating Handover Summary...</span>
-                              </>
-                            ) : (
-                              <>
-                                <span>✨ Compile AI Handover Report</span>
-                              </>
-                            )}
-                          </button>
-
-                          {handoverReport && (
-                            <div className="space-y-2">
-                              <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-sm text-[9.5px] text-slate-650 line-clamp-3 leading-relaxed">
-                                {handoverReport.replace(/[#*`_-]/g, '').slice(0, 150)}...
-                              </div>
-                              <div className="grid grid-cols-2 gap-2">
-                                <button
-                                  onClick={() => setExtendedViewType("handover")}
-                                  className="py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
-                                >
-                                  <span>🔍 Extended View</span>
-                                </button>
-                                <button
-                                  onClick={handleDownloadHandoverPDF}
-                                  className="py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-black uppercase text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
-                                >
-                                  <span>📥 Download PDF</span>
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Sub-tab Content: Note Parser */}
-                      {aiStudioSubTab === "dictate" && (
-                        <div className="space-y-2.5 font-sans">
-                          <div className="flex justify-between items-center select-none">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">RAW CLINICAL DICTATION NOTE:</span>
-                            <div className="flex space-x-1 font-mono">
-                              <button
-                                onClick={() => loadPresetDictation("mild")}
-                                className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-750 rounded-[2px] text-[7.5px] font-bold uppercase cursor-pointer"
-                              >
-                                Preset 1 (Stable)
-                              </button>
-                              <button
-                                onClick={() => loadPresetDictation("severe")}
-                                className="px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-750 rounded-[2px] text-[7.5px] font-bold uppercase cursor-pointer"
-                              >
-                                Preset 2 (Severe)
-                              </button>
-                            </div>
-                          </div>
-
-                          <textarea
-                            value={rawDictationNote}
-                            onChange={(e) => setRawDictationNote(e.target.value)}
-                            placeholder="Type or dictate a raw clinical observation note here... (e.g. 'Patient in Bed 1 is comfortable. Hourly rounds checked, oxygen inspected, elevated bed safety rails.')"
-                            className="w-full h-14 p-2 bg-white border border-slate-200 rounded text-[9.5px] text-slate-800 leading-normal font-sans focus:outline-custom-teal focus:ring-1 focus:ring-custom-teal"
-                          />
-
-                          <button
-                            onClick={handleParseDictation}
-                            disabled={isParseLoading}
-                            className="w-full py-1.5 bg-custom-teal hover:bg-custom-navy text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
-                          >
-                            {isParseLoading ? (
-                              <>
-                                <RefreshCw size={10} className="animate-spin mr-1" />
-                                <span>AI Clinical Engine Parsing Note...</span>
-                              </>
-                            ) : (
-                              <>
-                                <span>🧠 Parse Note & Auto-Update Checklists</span>
-                              </>
-                            )}
-                          </button>
-
-                          {parsedNoteResult && (
-                            <div className="space-y-2">
-                              <div className="flex items-center space-x-1 text-[8px] bg-[#E6F4EA] text-[#059669] border border-[#A7F3D0] px-1.5 py-0.5 rounded font-black uppercase font-mono w-fit">
-                                <span>✓ Parse Success & Checklist Sync Active</span>
-                              </div>
-
-                              <div className="grid grid-cols-2 gap-2 text-[8px] font-mono bg-slate-50 p-1.5 rounded border border-slate-150">
-                                <div>
-                                  <span className="text-slate-400 font-bold">EXTRACTED VITALS:</span>
-                                  <div className="text-slate-800 font-extrabold mt-0.5">
-                                    HR: {parsedNoteResult.vitals?.hr || "N/A"} bpm | SpO₂: {parsedNoteResult.vitals?.spo2 || "N/A"}%
-                                  </div>
-                                </div>
-                                <div>
-                                  <span className="text-slate-400 font-bold">RESPIRATORY/BP:</span>
-                                  <div className="text-slate-800 font-extrabold mt-0.5">
-                                    RR: {parsedNoteResult.vitals?.rr || "N/A"} /min | BP: {parsedNoteResult.vitals?.bp || "N/A"}
-                                  </div>
-                                </div>
-                              </div>
-
-                              <button
-                                onClick={() => setExtendedViewType("dictate")}
-                                className="w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer text-center font-mono"
-                              >
-                                🔍 See Extended Analysis View
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Sub-tab Content: Triage Assistant */}
-                      {aiStudioSubTab === "triage" && (
-                        <div className="space-y-2.5 font-sans">
-                          <div className="flex justify-between items-center mb-1 select-none">
-                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wide font-mono">AI PRIORITY ICU ROUNDS QUEUE:</span>
-                            <button
-                              onClick={handleRunWardTriage}
-                              disabled={isTriageLoading}
-                              className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-750 rounded-[2px] font-mono text-[7px] font-black uppercase flex items-center space-x-1 cursor-pointer"
-                            >
-                              <RefreshCw size={8} className={isTriageLoading ? "animate-spin mr-0.5" : "mr-0.5"} />
-                              <span>Re-Calculate</span>
-                            </button>
-                          </div>
-
-                          {isTriageLoading ? (
-                            <div className="p-4 bg-white border border-slate-150 rounded text-center text-slate-500 font-mono text-[9px] flex items-center justify-center space-x-2">
-                              <RefreshCw size={10} className="animate-spin mr-1" />
-                              <span>Evaluating ward beds early-warning metrics...</span>
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              {wardTriageResult && wardTriageResult.length > 0 && (
-                                <div className="p-2.5 bg-white border border-slate-250 rounded-sm space-y-1 hover:border-indigo-400 transition-all select-none">
-                                  <div className="flex justify-between items-center font-mono">
-                                    <div className="flex items-center space-x-1.5">
-                                      <span className="px-1.5 py-0.2 border rounded-sm font-black text-[7.5px] uppercase bg-rose-100 text-rose-800 border-rose-200">
-                                        {wardTriageResult[0].priority}
-                                      </span>
-                                      <span className="font-extrabold text-slate-800 text-[9.5px]">{wardTriageResult[0].bedId}: {wardTriageResult[0].name}</span>
-                                    </div>
-                                  </div>
-                                  <div className="text-[9px] text-slate-700 font-sans mt-1">
-                                    <span className="font-extrabold text-indigo-950 uppercase text-[8px] block tracking-wide">RECOMMENDED ACTION:</span>
-                                    <p className="font-bold text-slate-800 mt-0.5">{wardTriageResult[0].action}</p>
-                                  </div>
-                                </div>
-                              )}
-                              <button
-                                onClick={() => setExtendedViewType("triage")}
-                                className="w-full py-1.5 bg-custom-navy hover:bg-custom-teal text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer text-center font-mono"
-                              >
-                                🔍 See Extended Triage View
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    {/* Extended Cockpit Modal Toggle Button */}
+                    <button
+                      onClick={() => setExtendedViewType("cockpit")}
+                      className="mt-1 mb-3.5 w-full py-2.5 bg-custom-navy hover:bg-custom-teal text-white font-extrabold uppercase text-[9px] rounded transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
+                    >
+                      <span>🔍 See Extended Cockpit (Checklist, Timeline &amp; AI Studio)</span>
+                    </button>
 
                     {/* Clinician One-Click Actions */}
                     <div className="mt-auto shrink-0 pt-3 border-t border-slate-200 font-mono">
@@ -4099,83 +4224,33 @@ export default function App() {
                     </div>
 
                     {/* Doctor Workload / Availability Matrix */}
-                    <div className="bg-white border-2 border-custom-navy p-3.5 rounded-md shadow-md flex-1 flex flex-col">
-                      <div className="mb-2 pb-1 border-b border-slate-200 flex justify-between items-baseline shrink-0">
-                        <span className="text-[10px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">STAFF MATRIX</span>
-                        <span className="text-[8px] font-extrabold text-custom-navy uppercase font-mono">ON-DUTY</span>
-                      </div>
-
-                      <div className="space-y-2 mt-1">
-                        
-                        {/* Doctor 1 */}
-                        <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-sm font-mono text-[9.5px]">
-                          <div>
-                            <div className="font-extrabold text-slate-800">Dr. John Doe</div>
-                            <span className="text-[8px] text-slate-400 uppercase">Emergency Med</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="px-1.5 py-0.1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold rounded-sm uppercase text-[7px]">
-                              Available
-                            </span>
-                            <div className="text-[8px] text-slate-500 font-bold mt-0.5">2 Patients</div>
-                          </div>
+                    <div className="bg-white border-2 border-custom-navy p-3.5 rounded-md shadow-md flex-1 flex flex-col justify-between">
+                      <div>
+                        <div className="mb-2 pb-1 border-b border-slate-200 flex justify-between items-baseline shrink-0">
+                          <span className="text-[10px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">STAFF MATRIX</span>
+                          <span className="text-[8px] font-extrabold text-custom-navy uppercase font-mono">ON-DUTY</span>
                         </div>
 
-                        {/* Doctor 2 */}
-                        <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-sm font-mono text-[9.5px]">
-                          <div>
-                            <div className="font-extrabold text-slate-800">Dr. Emma Brooks</div>
-                            <span className="text-[8px] text-slate-400 uppercase">Pulmonology Specialist</span>
+                        <div className="text-[10px] font-bold text-slate-700 leading-normal font-sans space-y-1.5 mt-1">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                            <span><strong>Dr. John Doe</strong> is available (2 Patients)</span>
                           </div>
-                          <div className="text-right">
-                            <span className="px-1.5 py-0.1 bg-amber-50 text-amber-700 border border-amber-200 font-bold rounded-sm uppercase text-[7px]">
-                              Busy
-                            </span>
-                            <div className="text-[8px] text-slate-500 font-bold mt-0.5">8 Patients</div>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                            <span><strong>Dr. Emma Brooks</strong> is busy (8 Patients)</span>
                           </div>
-                        </div>
-
-                        {/* Doctor 3 */}
-                        <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-sm font-mono text-[9.5px]">
-                          <div>
-                            <div className="font-extrabold text-slate-800">Dr. James Smith</div>
-                            <span className="text-[8px] text-slate-400 uppercase">Cardiology Specialist</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="px-1.5 py-0.1 bg-amber-50 text-amber-700 border border-amber-200 font-bold rounded-sm uppercase text-[7px]">
-                              Busy
-                            </span>
-                            <div className="text-[8px] text-slate-500 font-bold mt-0.5">5 Patients</div>
-                          </div>
-                        </div>
-
-                      </div>
-
-                      {/* AI Suggested Doctor recommendation */}
-                      <div className="mt-auto pt-3 border-t border-slate-100">
-                        <div className="p-2.5 bg-custom-ice border border-custom-teal/30 rounded-md text-[9.5px]">
-                          <div className="flex items-center space-x-1 font-bold text-custom-navy font-mono text-[8px] uppercase tracking-wide">
-                            <Sparkles size={11} className="text-custom-teal animate-pulse" />
-                            <span>AI Dispatch recommendation</span>
-                          </div>
-                          <div className="text-slate-800 text-[10px] font-black mt-1.5">
-                            Suggested on-duty: <strong className="text-custom-navy">Dr. John Doe</strong>
-                          </div>
-                          <p className="text-[9px] text-custom-navy mt-0.5 leading-normal font-sans">
-                            Lowest caseload (2 patients). ETA: <strong>2 mins</strong>.
-                          </p>
-                          
-                          <button
-                            onClick={() => {
-                              setDatasetSuccess(`✅ DISPATCH SUCCESS: Bedward pager alert dispatched to Dr. John Doe. Estimated arrival at ${activePatient.bedId}: 120s.`);
-                            }}
-                            className="mt-2 w-full py-1 bg-custom-navy text-white font-extrabold uppercase hover:bg-custom-teal text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono"
-                          >
-                            Assign Pager & Call
-                          </button>
                         </div>
                       </div>
 
+                      <div className="mt-4 pt-3 border-t border-slate-100">
+                        <button
+                          onClick={() => setExtendedViewType("beds")}
+                          className="w-full py-2.5 bg-custom-navy hover:bg-custom-teal text-white font-extrabold uppercase text-[9px] rounded-sm transition-all cursor-pointer text-center font-mono flex items-center justify-center space-x-1"
+                        >
+                          <span>🔍 See Extended Beds &amp; Staffing</span>
+                        </button>
+                      </div>
                     </div>
 
                   </div>
