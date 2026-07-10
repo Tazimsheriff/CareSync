@@ -2232,7 +2232,7 @@ export default function App() {
   const selectedPatient = patients.find(p => p.id === selectedPatientId) || null;
 
   return (
-    <div id="pac-monitor-root" className="h-screen w-screen bg-[#F1F5F9] flex flex-col text-slate-800 font-sans select-none overflow-hidden relative">
+    <div id="pac-monitor-root" className="h-screen w-screen bg-[#ccecee] flex flex-col text-slate-800 font-sans select-none overflow-hidden relative">
       <style>{`
         @keyframes alarm-flash {
           0%, 100% { opacity: 1; }
@@ -2247,6 +2247,27 @@ export default function App() {
         }
         .animate-pulse-dot {
           animation: pulse-dot ${Math.max(0.4, 60 / hr).toFixed(2)}s infinite ease-in-out;
+        }
+        .bg-custom-ice {
+          background-color: #ccecee !important;
+        }
+        .bg-custom-navy {
+          background-color: #095d7e !important;
+        }
+        .bg-custom-teal {
+          background-color: #14967f !important;
+        }
+        .text-custom-navy {
+          color: #095d7e !important;
+        }
+        .text-custom-teal {
+          color: #14967f !important;
+        }
+        .border-custom-navy {
+          border-color: #095d7e !important;
+        }
+        .border-custom-teal {
+          border-color: #14967f !important;
         }
       `}</style>
 
@@ -2973,38 +2994,38 @@ export default function App() {
                 
                 {/* Question 1: WHO IS CRITICAL? (Hospital Statistics top panel) */}
                 <div className="p-4 pb-2 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 shrink-0">
-                  <div className="bg-white border-l-4 border-[#DC2626] border border-slate-200 p-3 shadow-xs rounded-sm flex items-center justify-between">
+                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between">
                     <div>
-                      <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono">Critical priority</span>
-                      <h4 className="text-[22px] font-extrabold text-[#DC2626] font-mono leading-tight mt-0.5">
+                      <span className="text-[10px] font-bold tracking-wider text-custom-navy uppercase font-mono">Critical Priority</span>
+                      <h4 className="text-[22px] font-extrabold text-[#DC2626] font-sans leading-tight mt-0.5">
                         {patients.filter(p => p.priority === "Critical").length} Patients
                       </h4>
                     </div>
-                    <div className="h-9 w-9 rounded-full bg-red-50 flex items-center justify-center text-[#DC2626]">
+                    <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 border border-red-200">
                       <ShieldAlert size={18} className="animate-pulse" />
                     </div>
                   </div>
 
-                  <div className="bg-white border-l-4 border-[#F97316] border border-slate-200 p-3 shadow-xs rounded-sm flex items-center justify-between">
+                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between">
                     <div>
-                      <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono">High Risk</span>
-                      <h4 className="text-[22px] font-extrabold text-[#F97316] font-mono leading-tight mt-0.5">
+                      <span className="text-[10px] font-bold tracking-wider text-custom-navy uppercase font-mono">High Risk</span>
+                      <h4 className="text-[22px] font-extrabold text-[#F97316] font-sans leading-tight mt-0.5">
                         {patients.filter(p => p.priority === "High Risk").length} Patients
                       </h4>
                     </div>
-                    <div className="h-9 w-9 rounded-full bg-amber-50 flex items-center justify-center text-[#F97316]">
+                    <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center text-[#F97316] border border-amber-200">
                       <AlertTriangle size={18} />
                     </div>
                   </div>
 
-                  <div className="bg-white border-l-4 border-[#22C55E] border border-slate-200 p-3 shadow-xs rounded-sm flex items-center justify-between">
+                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between">
                     <div>
-                      <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase font-mono">Stable / Under Watch</span>
-                      <h4 className="text-[22px] font-extrabold text-slate-800 font-mono leading-tight mt-0.5">
+                      <span className="text-[10px] font-bold tracking-wider text-custom-navy uppercase font-mono">Stable / Under Watch</span>
+                      <h4 className="text-[22px] font-extrabold text-custom-teal font-sans leading-tight mt-0.5">
                         {patients.filter(p => p.priority === "Stable" || p.priority === "Moderate").length} Patients
                       </h4>
                     </div>
-                    <div className="h-9 w-9 rounded-full bg-emerald-50 flex items-center justify-center text-[#22C55E]">
+                    <div className="h-10 w-10 rounded-full bg-emerald-100 flex items-center justify-center text-custom-teal border border-emerald-200">
                       <CheckCircle size={18} />
                     </div>
                   </div>
@@ -3048,14 +3069,14 @@ export default function App() {
                 <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 p-4 pt-2 min-h-0">
                   
                   {/* Question 2: Which patient should I see first? (Left-side queue, 3/12 cols) */}
-                  <div className="xl:col-span-3 bg-white border border-slate-200 p-3 flex flex-col h-[520px] xl:h-full rounded-sm shadow-xs overflow-hidden">
+                  <div className="xl:col-span-3 bg-white border-2 border-custom-navy p-3 flex flex-col h-[520px] xl:h-full rounded-md shadow-md overflow-hidden">
                     <div className="mb-2 shrink-0">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">PRIORITY QUEUE</span>
-                        <span className="text-[8px] font-extrabold bg-[#E6F4EA] text-[#059669] px-1.5 py-0.2 rounded-sm font-mono uppercase">REAL-TIME</span>
+                        <span className="text-[10px] font-bold text-custom-teal uppercase tracking-wider font-mono">PRIORITY QUEUE</span>
+                        <span className="text-[8px] font-extrabold bg-custom-teal/15 text-custom-teal px-1.5 py-0.2 rounded-sm font-mono uppercase">REAL-TIME</span>
                       </div>
-                      <div className="text-[11px] font-bold text-slate-800 mt-1">Which patient should I see first?</div>
-                      <p className="text-[9px] text-slate-400 leading-tight mt-0.5">Sorted strictly by predictive decompensation risk score.</p>
+                      <div className="text-[11.5px] font-black text-custom-navy mt-1">Which patient should I see first?</div>
+                      <p className="text-[9px] text-slate-500 leading-tight mt-0.5">Sorted strictly by predictive decompensation risk score.</p>
                     </div>
 
                     {/* List Container */}
@@ -3112,16 +3133,16 @@ export default function App() {
                   </div>
 
                   {/* Question 3: Why is patient critical? (Center detail view, 6/12 cols) */}
-                  <div className="xl:col-span-6 bg-white border border-slate-200 p-4 rounded-sm shadow-xs flex flex-col overflow-y-auto">
-                    <div className="border-b border-slate-100 pb-3 mb-3 shrink-0">
+                  <div className="xl:col-span-6 bg-white border-2 border-custom-navy p-4 rounded-md shadow-md flex flex-col overflow-y-auto">
+                    <div className="border-b border-slate-200 pb-3 mb-3 shrink-0">
                       <div className="flex flex-wrap justify-between items-center gap-2 font-mono">
                         <div className="flex items-center space-x-2">
-                          <span className="text-[11px] bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 font-extrabold font-mono rounded-sm">
-                            {activePatient.bedId.toUpperCase()}
+                          <span className="text-[11px] bg-custom-navy text-white px-2.5 py-0.5 font-extrabold font-mono rounded-sm">
+                            BED {activePatient.bedId.toUpperCase()}
                           </span>
-                          <h3 className="text-sm font-extrabold text-slate-900">{activePatient.name}</h3>
+                          <h3 className="text-base font-black text-custom-navy">{activePatient.name}</h3>
                         </div>
-                        <span className="text-[9.5px] font-bold text-slate-400">PATIENT ID: {activePatient.id}</span>
+                        <span className="text-[9.5px] font-black text-custom-teal">PATIENT ID: {activePatient.id}</span>
                       </div>
 
                       <div className="flex flex-wrap gap-2.5 text-[10px] text-slate-500 font-bold mt-2 font-mono">
@@ -3137,126 +3158,126 @@ export default function App() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 font-mono">
                       
                       {/* HR */}
-                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
-                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>{isNurseModeActive ? "Pulse Rate (ECG)" : "Heart rate"}</span>
-                          <span className="text-[#059669]">{isNurseModeActive ? "Target: 60-100" : "50-120"}</span>
+                      <div className="p-3 bg-white border-2 border-custom-navy rounded-md shadow-sm flex flex-col justify-between h-[85px]">
+                        <div className="flex justify-between text-[8px] font-bold text-custom-navy uppercase tracking-tight">
+                          <span>{isNurseModeActive ? "Pulse Rate (ECG)" : "Heart Rate"}</span>
+                          <span className="text-custom-teal font-extrabold">{isNurseModeActive ? "Target: 60-100" : "50-120"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
-                          <span className="text-2xl font-extrabold text-[#059669]">{activePatient.hr}</span>
-                          <span className="text-[8.5px] text-slate-400">BPM</span>
+                          <span className="text-2xl font-black text-custom-teal">{activePatient.hr}</span>
+                          <span className="text-[8.5px] text-slate-500 font-extrabold">BPM</span>
                         </div>
-                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">
                           {activePatient.hr > 120 ? (
-                            <span className="text-red-600 font-extrabold">↑ Tachycardia</span>
+                            <span className="text-red-650 font-extrabold">↑ Tachycardia</span>
                           ) : activePatient.hr < 60 ? (
                             <span className="text-amber-600 font-bold">↓ Bradycardia</span>
                           ) : (
-                            <span className="text-[#059669] font-bold">● Normal Rhythm</span>
+                            <span className="text-custom-teal font-extrabold">● Normal Rhythm</span>
                           )}
                         </div>
                       </div>
 
                       {/* SpO2 */}
-                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
-                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>{isNurseModeActive ? "Oxygen Level (SpO₂)" : "SpO₂ sat"}</span>
-                          <span className="text-[#0284C7]">{isNurseModeActive ? "Goal: >94%" : "90-100"}</span>
+                      <div className="p-3 bg-white border-2 border-custom-navy rounded-md shadow-sm flex flex-col justify-between h-[85px]">
+                        <div className="flex justify-between text-[8px] font-bold text-custom-navy uppercase tracking-tight">
+                          <span>{isNurseModeActive ? "Oxygen Level (SpO₂)" : "Oxygen Saturation"}</span>
+                          <span className="text-sky-650 font-extrabold">{isNurseModeActive ? "Goal: >94%" : "90-100"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
-                          <span className="text-2xl font-extrabold text-[#0284C7]">{activePatient.spo2}</span>
-                          <span className="text-[8.5px] text-slate-400">%</span>
+                          <span className="text-2xl font-black text-sky-750">{activePatient.spo2}</span>
+                          <span className="text-[8.5px] text-slate-500 font-extrabold">%</span>
                         </div>
-                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">
                           {activePatient.spo2 < 93 ? (
-                            <span className="text-red-600 font-extrabold">↓ Hypoxia Watch</span>
+                            <span className="text-red-650 font-extrabold">↓ Hypoxia Watch</span>
                           ) : (
-                            <span className="text-[#0284C7] font-bold">● Safe Range</span>
+                            <span className="text-sky-650 font-extrabold">● Safe Range</span>
                           )}
                         </div>
                       </div>
 
                       {/* Blood Pressure */}
-                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
-                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>{isNurseModeActive ? "Blood Pressure (NIBP)" : "Blood pressure"}</span>
-                          <span className="text-red-650 text-[7.5px]">{isNurseModeActive ? "Target: <140/90" : "90/50 - 140/90"}</span>
+                      <div className="p-3 bg-white border-2 border-custom-navy rounded-md shadow-sm flex flex-col justify-between h-[85px]">
+                        <div className="flex justify-between text-[8px] font-bold text-custom-navy uppercase tracking-tight">
+                          <span>{isNurseModeActive ? "Blood Pressure (NIBP)" : "Blood Pressure"}</span>
+                          <span className="text-rose-650 text-[7.5px] font-extrabold">{isNurseModeActive ? "Target: <140/90" : "90/50 - 140/90"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
-                          <span className="text-xl font-extrabold text-red-600 tracking-tight">{activePatient.bpSys}/{activePatient.bpDia}</span>
-                          <span className="text-[8px] text-slate-400">mmHg</span>
+                          <span className="text-xl font-black text-rose-650 tracking-tight">{activePatient.bpSys}/{activePatient.bpDia}</span>
+                          <span className="text-[8px] text-slate-500 font-extrabold">mmHg</span>
                         </div>
-                        <div className="text-[8.5px] font-bold text-slate-400 mt-1 uppercase">
+                        <div className="text-[8.5px] font-bold text-slate-500 mt-1 uppercase">
                           {activePatient.bpSys < 90 ? (
                             <span className="text-red-650 font-extrabold">↓ Hypotension</span>
                           ) : activePatient.bpSys > 140 ? (
                             <span className="text-red-600 font-extrabold">↑ Hypertension</span>
                           ) : (
-                            <span className="text-slate-400">● Stable Range</span>
+                            <span className="text-custom-teal font-extrabold">● Stable Range</span>
                           )}
                         </div>
                       </div>
 
                       {/* Temperature */}
-                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
-                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>{isNurseModeActive ? "Body Temp (Thermal)" : "Temp"}</span>
-                          <span className="text-amber-600">{isNurseModeActive ? "Normal: 36.5-37.5" : "36.0 - 38.5"}</span>
+                      <div className="p-3 bg-white border-2 border-custom-navy rounded-md shadow-sm flex flex-col justify-between h-[85px]">
+                        <div className="flex justify-between text-[8px] font-bold text-custom-navy uppercase tracking-tight">
+                          <span>{isNurseModeActive ? "Body Temp (Thermal)" : "Temperature"}</span>
+                          <span className="text-amber-600 font-extrabold">{isNurseModeActive ? "Normal: 36.5-37.5" : "36.0 - 38.5"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
-                          <span className="text-2xl font-extrabold text-amber-600">{activePatient.temp.toFixed(1)}</span>
-                          <span className="text-[9.5px] text-slate-500">°C</span>
+                          <span className="text-2xl font-black text-amber-600">{activePatient.temp.toFixed(1)}</span>
+                          <span className="text-[9.5px] text-slate-500 font-extrabold">°C</span>
                         </div>
-                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">
                           {activePatient.temp > 38.0 ? (
                             <span className="text-amber-700 font-extrabold">↑ Active Fever</span>
                           ) : activePatient.temp < 36.0 ? (
-                            <span className="text-blue-600 font-bold">↓ Hypothermia</span>
+                            <span className="text-blue-600 font-extrabold">↓ Hypothermia</span>
                           ) : (
-                            <span className="text-[#059669] font-bold">● Normal Temp</span>
+                            <span className="text-custom-teal font-extrabold">● Normal Temp</span>
                           )}
                         </div>
                       </div>
 
                       {/* Respiratory rate */}
-                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
-                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>{isNurseModeActive ? "Breathing Rate (RR)" : "Resp Rate"}</span>
-                          <span className="text-[#7C3AED]">{isNurseModeActive ? "Normal: 12-20" : "8-25"}</span>
+                      <div className="p-3 bg-white border-2 border-custom-navy rounded-md shadow-sm flex flex-col justify-between h-[85px]">
+                        <div className="flex justify-between text-[8px] font-bold text-custom-navy uppercase tracking-tight">
+                          <span>{isNurseModeActive ? "Breathing Rate (RR)" : "Respiration Rate"}</span>
+                          <span className="text-purple-650 font-extrabold">{isNurseModeActive ? "Normal: 12-20" : "8-25"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
-                          <span className="text-2xl font-extrabold text-[#7C3AED]">{activePatient.rr}</span>
-                          <span className="text-[8.5px] text-slate-400">/min</span>
+                          <span className="text-2xl font-black text-purple-650">{activePatient.rr}</span>
+                          <span className="text-[8.5px] text-slate-500 font-extrabold">/min</span>
                         </div>
-                        <div className="text-[8px] font-bold text-slate-400 mt-1 uppercase">
+                        <div className="text-[8px] font-bold text-slate-500 mt-1 uppercase">
                           {activePatient.rr > 22 ? (
-                            <span className="text-[#7C3AED] font-extrabold">↑ Tachypnea</span>
+                            <span className="text-purple-650 font-extrabold">↑ Tachypnea</span>
                           ) : activePatient.rr < 12 ? (
-                            <span className="text-[#7C3AED] font-bold">↓ Bradypnea</span>
+                            <span className="text-purple-600 font-bold">↓ Bradypnea</span>
                           ) : (
-                            <span className="text-[#7C3AED] font-bold">● Normal Breath</span>
+                            <span className="text-custom-teal font-extrabold">● Normal Breath</span>
                           )}
                         </div>
                       </div>
 
                       {/* Risk predict */}
-                      <div className="p-3 bg-[#F8FAFC]/70 border border-slate-200 rounded-sm flex flex-col justify-between h-[80px]">
-                        <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-tight">
-                          <span>{isNurseModeActive ? "AI Crash Risk (EDI)" : "EDI Risk score"}</span>
-                          <span className="text-slate-400">{isNurseModeActive ? "Warning Level: >65%" : "MIN 0 MAX 100"}</span>
+                      <div className="p-3 bg-white border-2 border-custom-navy rounded-md shadow-sm flex flex-col justify-between h-[85px]">
+                        <div className="flex justify-between text-[8px] font-bold text-custom-navy uppercase tracking-tight">
+                          <span>{isNurseModeActive ? "AI Crash Risk (EDI)" : "AI Crash Index"}</span>
+                          <span className="text-custom-navy font-black">{isNurseModeActive ? "Critical Trigger: >65%" : "0% - 100%"}</span>
                         </div>
                         <div className="flex items-baseline justify-between mt-1">
-                          <span className="text-2xl font-extrabold" style={{ color: activePatient.riskScore > 65 ? "#DC2626" : "#22C55E" }}>
+                          <span className="text-2xl font-black" style={{ color: activePatient.riskScore > 65 ? "#DC2626" : "#14967f" }}>
                             {activePatient.riskScore}%
                           </span>
                         </div>
                         <div className="text-[8px] font-bold mt-1 uppercase">
                           {activePatient.riskScore > 75 ? (
-                            <span className="text-red-600 font-extrabold">Critical Risk</span>
+                            <span className="text-red-650 font-black">Critical Risk</span>
                           ) : activePatient.riskScore > 40 ? (
-                            <span className="text-amber-600 font-bold">Moderate Risk</span>
+                            <span className="text-amber-600 font-extrabold">Moderate Risk</span>
                           ) : (
-                            <span className="text-[#22C55E] font-extrabold">Stable Watch</span>
+                            <span className="text-custom-teal font-black">Stable Watch</span>
                           )}
                         </div>
                       </div>
@@ -3362,9 +3383,9 @@ export default function App() {
                     )}
 
                     {/* Explainable AI block (Answering WHY is the patient critical?) */}
-                    <div className="bg-slate-50 border border-slate-200 p-3.5 mb-4 rounded-sm">
-                      <div className="flex items-center space-x-1.5 text-[10px] font-extrabold text-[#2563EB] uppercase tracking-wider font-mono">
-                        <Sparkles size={12} />
+                    <div className="bg-white border-2 border-custom-teal p-3.5 mb-4 rounded-md shadow-sm">
+                      <div className="flex items-center space-x-1.5 text-[10px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">
+                        <Sparkles size={12} className="text-custom-teal" />
                         <span>CareSync Explainable AI Clinical Guard</span>
                       </div>
                       
@@ -3441,28 +3462,28 @@ export default function App() {
                     </div>
 
                     {/* CareSync Clinical AI Automation Studio (For Judges & Nurses) */}
-                    <div className="bg-[#EEF2F6] border border-slate-300 p-4 mb-4 rounded-sm">
+                    <div className="bg-white border-2 border-custom-navy p-4 mb-4 rounded-md shadow-md">
                       <div className="flex justify-between items-center border-b border-slate-200 pb-2 mb-3 select-none">
-                        <div className="flex items-center space-x-1.5 text-[10px] font-black text-indigo-950 uppercase tracking-wider font-mono">
-                          <Sparkles size={12} className="text-indigo-600 animate-pulse" />
+                        <div className="flex items-center space-x-1.5 text-[10px] font-black text-custom-navy uppercase tracking-wider font-mono">
+                          <Sparkles size={12} className="text-custom-teal animate-pulse" />
                           <span>📋 Clinical AI Automation Studio</span>
                         </div>
-                        <span className="bg-indigo-600 text-white text-[7.5px] font-black uppercase px-2 py-0.5 rounded-sm tracking-widest font-mono">
-                          JUDGES CHOICE
+                        <span className="bg-custom-teal text-white text-[7.5px] font-black uppercase px-2 py-0.5 rounded-sm tracking-widest font-mono">
+                          AI ASSIST
                         </span>
                       </div>
 
-                      <p className="text-[9.5px] text-slate-500 font-medium mb-3 leading-normal">
-                        Empowers busy nursing staff with state-of-the-art LLM clinical intelligence tools. Run Shift Handovers, dictate clinical records, and prioritize rounds instantly:
+                      <p className="text-[9.5px] text-slate-500 font-medium mb-3 leading-normal font-sans">
+                        Empowers busy nursing staff with state-of-the-art AI clinical intelligence tools. Run Shift Handovers, dictate clinical records, and prioritize rounds instantly:
                       </p>
 
                       {/* Tool selection sub-tabs */}
                       <div className="grid grid-cols-3 gap-1.5 mb-3.5 select-none font-mono">
                         <button
                           onClick={() => setAiStudioSubTab("handover")}
-                          className={`px-1.5 py-1.5 text-[8.5px] font-extrabold uppercase rounded-sm border transition-all cursor-pointer text-center ${
+                          className={`px-1.5 py-1.5 text-[8.5px] font-black uppercase rounded-sm border transition-all cursor-pointer text-center ${
                             aiStudioSubTab === "handover"
-                              ? "bg-indigo-950 text-white border-indigo-950 shadow-xs"
+                              ? "bg-custom-navy text-white border-custom-navy shadow-sm"
                               : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
                           }`}
                         >
@@ -3470,9 +3491,9 @@ export default function App() {
                         </button>
                         <button
                           onClick={() => setAiStudioSubTab("dictate")}
-                          className={`px-1.5 py-1.5 text-[8.5px] font-extrabold uppercase rounded-sm border transition-all cursor-pointer text-center ${
+                          className={`px-1.5 py-1.5 text-[8.5px] font-black uppercase rounded-sm border transition-all cursor-pointer text-center ${
                             aiStudioSubTab === "dictate"
-                              ? "bg-indigo-950 text-white border-indigo-950 shadow-xs"
+                              ? "bg-custom-navy text-white border-custom-navy shadow-sm"
                               : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
                           }`}
                         >
@@ -3483,9 +3504,9 @@ export default function App() {
                             setAiStudioSubTab("triage");
                             handleRunWardTriage();
                           }}
-                          className={`px-1.5 py-1.5 text-[8.5px] font-extrabold uppercase rounded-sm border transition-all cursor-pointer text-center ${
+                          className={`px-1.5 py-1.5 text-[8.5px] font-black uppercase rounded-sm border transition-all cursor-pointer text-center ${
                             aiStudioSubTab === "triage"
-                              ? "bg-indigo-950 text-white border-indigo-950 shadow-xs"
+                              ? "bg-custom-navy text-white border-custom-navy shadow-sm"
                               : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200"
                           }`}
                         >
@@ -3504,7 +3525,7 @@ export default function App() {
                           <button
                             onClick={handleGenerateHandover}
                             disabled={isHandoverLoading}
-                            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
+                            className="w-full py-1.5 bg-custom-teal hover:bg-custom-navy text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
                           >
                             {isHandoverLoading ? (
                               <>
@@ -3553,13 +3574,13 @@ export default function App() {
                             value={rawDictationNote}
                             onChange={(e) => setRawDictationNote(e.target.value)}
                             placeholder="Type or dictate a raw clinical observation note here... (e.g. 'Patient in Bed 1 is comfortable. Hourly rounds checked, oxygen inspected, elevated bed safety rails.')"
-                            className="w-full h-14 p-2 bg-white border border-slate-200 rounded text-[9.5px] text-slate-800 leading-normal font-sans focus:outline-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            className="w-full h-14 p-2 bg-white border border-slate-200 rounded text-[9.5px] text-slate-800 leading-normal font-sans focus:outline-custom-teal focus:ring-1 focus:ring-custom-teal"
                           />
 
                           <button
                             onClick={handleParseDictation}
                             disabled={isParseLoading}
-                            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
+                            className="w-full py-1.5 bg-custom-teal hover:bg-custom-navy text-white font-black uppercase text-[8.5px] rounded-sm transition-all cursor-pointer shadow-xs flex items-center justify-center space-x-1.5 font-mono"
                           >
                             {isParseLoading ? (
                               <>
@@ -3668,14 +3689,14 @@ export default function App() {
                     </div>
 
                     {/* Clinician One-Click Actions */}
-                    <div className="mt-auto shrink-0 pt-3 border-t border-slate-100 font-mono">
-                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Bedside Emergency Actions</div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[9px] font-bold">
+                    <div className="mt-auto shrink-0 pt-3 border-t border-slate-200 font-mono">
+                      <div className="text-[9px] font-black text-custom-teal uppercase tracking-widest mb-2">Bedside Emergency Actions</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[9px] font-black">
                         <button
                           onClick={() => {
                             setDatasetSuccess(`✅ CENTRAL COMMAND ALERT: ICU coordinator notified immediately for ${activePatient.name} in ${activePatient.bedId}. Dispatching coordinator...`);
                           }}
-                          className="py-2 px-1 text-center bg-[#DC2626] text-white hover:bg-red-750 tracking-tight transition-colors uppercase rounded-sm cursor-pointer shadow-2xs text-[8.5px]"
+                          className="py-2 px-1 text-center bg-[#DC2626] text-white hover:bg-red-700 tracking-tight transition-colors uppercase rounded-md cursor-pointer shadow-sm text-[8.5px]"
                         >
                           Notify ICU
                         </button>
@@ -3683,7 +3704,7 @@ export default function App() {
                           onClick={() => {
                             setDatasetSuccess(`✅ CLINICIAN ASSIGNED: Dr. John Doe (lowest workload, available) assigned to supervise ${activePatient.name} bedside monitor.`);
                           }}
-                          className="py-2 px-1 text-center bg-[#2563EB] text-white hover:bg-blue-700 tracking-tight transition-colors uppercase rounded-sm cursor-pointer shadow-2xs text-[8.5px]"
+                          className="py-2 px-1 text-center bg-custom-navy text-white hover:bg-custom-teal tracking-tight transition-colors uppercase rounded-md cursor-pointer shadow-sm text-[8.5px]"
                         >
                           Assign Doctor
                         </button>
@@ -3691,7 +3712,7 @@ export default function App() {
                           onClick={() => {
                             setDatasetSuccess(`✅ DISPATCH SUCCESS: Specialist Team [${activeMetrics.specialist.toUpperCase()}] dispatched to ${activePatient.bedId} with life-support tools.`);
                           }}
-                          className="py-2 px-1 text-center bg-indigo-600 text-white hover:bg-indigo-700 tracking-tight transition-colors uppercase rounded-sm cursor-pointer shadow-2xs text-[8.5px]"
+                          className="py-2 px-1 text-center bg-custom-teal text-white hover:bg-custom-navy tracking-tight transition-colors uppercase rounded-md cursor-pointer shadow-sm text-[8.5px]"
                         >
                           Call Team
                         </button>
@@ -3699,7 +3720,7 @@ export default function App() {
                           onClick={() => {
                             setSelectedPatientId(activePatient.id);
                           }}
-                          className="py-2 px-1 text-center bg-slate-50 text-slate-700 hover:bg-slate-200 hover:text-slate-900 border border-slate-300 transition-colors uppercase rounded-sm cursor-pointer text-[8.5px]"
+                          className="py-2 px-1 text-center bg-white text-custom-navy hover:bg-custom-ice border-2 border-custom-navy transition-colors uppercase rounded-md cursor-pointer text-[8.5px]"
                         >
                           Details Panel
                         </button>
@@ -3712,10 +3733,10 @@ export default function App() {
                   <div className="xl:col-span-3 flex flex-col gap-4 text-slate-800 h-full">
                     
                     {/* ICU Command Center Matrix Grid */}
-                    <div className="bg-white border border-slate-200 p-3 rounded-sm shadow-xs flex flex-col">
-                      <div className="mb-2 pb-1.5 border-b border-slate-100 flex justify-between items-center shrink-0">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">ICU BEDS GRID</span>
-                        <span className="text-[8px] font-bold bg-indigo-50 text-indigo-700 px-1.5 rounded-sm uppercase tracking-wide font-mono">20 BEDS</span>
+                    <div className="bg-white border-2 border-custom-navy p-3 rounded-md shadow-md flex flex-col">
+                      <div className="mb-2 pb-1.5 border-b border-slate-200 flex justify-between items-center shrink-0">
+                        <span className="text-[10px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">ICU BEDS GRID</span>
+                        <span className="text-[8px] font-extrabold bg-custom-teal/15 text-custom-teal px-1.5 rounded-sm uppercase tracking-wide font-mono">20 BEDS</span>
                       </div>
 
                       <div className="grid grid-cols-5 gap-1.5 flex-1 select-none font-mono">
@@ -3755,10 +3776,10 @@ export default function App() {
                     </div>
 
                     {/* Doctor Workload / Availability Matrix */}
-                    <div className="bg-white border border-slate-200 p-3.5 rounded-sm shadow-xs flex-1 flex flex-col">
-                      <div className="mb-2 pb-1 border-b border-slate-100 flex justify-between items-baseline shrink-0">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">STAFF MATRIX</span>
-                        <span className="text-[8px] font-bold text-slate-400 uppercase font-mono">ON-DUTY</span>
+                    <div className="bg-white border-2 border-custom-navy p-3.5 rounded-md shadow-md flex-1 flex flex-col">
+                      <div className="mb-2 pb-1 border-b border-slate-200 flex justify-between items-baseline shrink-0">
+                        <span className="text-[10px] font-extrabold text-custom-teal uppercase tracking-wider font-mono">STAFF MATRIX</span>
+                        <span className="text-[8px] font-extrabold text-custom-navy uppercase font-mono">ON-DUTY</span>
                       </div>
 
                       <div className="space-y-2 mt-1">
@@ -3809,15 +3830,15 @@ export default function App() {
 
                       {/* AI Suggested Doctor recommendation */}
                       <div className="mt-auto pt-3 border-t border-slate-100">
-                        <div className="p-2.5 bg-[#EFF6FF] border border-[#BFDBFE] rounded-sm text-[9.5px]">
-                          <div className="flex items-center space-x-1 font-bold text-[#1E40AF] font-mono text-[8px] uppercase tracking-wide">
-                            <Sparkles size={11} className="text-[#2563EB]" />
+                        <div className="p-2.5 bg-custom-ice border border-custom-teal/30 rounded-md text-[9.5px]">
+                          <div className="flex items-center space-x-1 font-bold text-custom-navy font-mono text-[8px] uppercase tracking-wide">
+                            <Sparkles size={11} className="text-custom-teal animate-pulse" />
                             <span>AI Dispatch recommendation</span>
                           </div>
-                          <div className="text-slate-850 text-[10px] font-bold mt-1.5">
-                            Suggested on-duty: <strong className="text-[#1E40AF]">Dr. John Doe</strong>
+                          <div className="text-slate-800 text-[10px] font-black mt-1.5">
+                            Suggested on-duty: <strong className="text-custom-navy">Dr. John Doe</strong>
                           </div>
-                          <p className="text-[9px] text-[#1D4ED8] mt-0.5 leading-normal font-sans">
+                          <p className="text-[9px] text-custom-navy mt-0.5 leading-normal font-sans">
                             Lowest caseload (2 patients). ETA: <strong>2 mins</strong>.
                           </p>
                           
@@ -3825,7 +3846,7 @@ export default function App() {
                             onClick={() => {
                               setDatasetSuccess(`✅ DISPATCH SUCCESS: Bedward pager alert dispatched to Dr. John Doe. Estimated arrival at ${activePatient.bedId}: 120s.`);
                             }}
-                            className="mt-2 w-full py-1 bg-[#2563EB] text-white font-bold uppercase hover:bg-blue-750 text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono"
+                            className="mt-2 w-full py-1 bg-custom-navy text-white font-extrabold uppercase hover:bg-custom-teal text-[8px] rounded-sm transition-all cursor-pointer text-center font-mono"
                           >
                             Assign Pager & Call
                           </button>
