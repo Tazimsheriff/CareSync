@@ -1319,6 +1319,8 @@ export default function App() {
   const [datasetSuccess, setDatasetSuccess] = useState<string | null>(null);
   const [isLabbing, setIsLabbing] = useState(false);
   const [isVitalsOpen, setIsVitalsOpen] = useState(false);
+  const [mobileLiveSubTab, setMobileLiveSubTab] = useState<"cockpit" | "queue" | "beds">("cockpit");
+  const [isControlsBarExpanded, setIsControlsBarExpanded] = useState(false);
 
   const loadAndInjectDataset = async (datasetKey: "sepsis" | "heart" | "maternal", filename: string) => {
     setIsLabbing(true);
@@ -2447,7 +2449,7 @@ export default function App() {
           </div>
 
           {/* Tab Switchers (Scrollable on small screens) */}
-          <div className="flex h-full border-l border-slate-200 ml-1 sm:ml-2 overflow-x-auto whitespace-nowrap scrollbar-none flex-nowrap shrink max-w-[120px] xs:max-w-[180px] sm:max-w-xs md:max-w-none">
+          <div className="flex h-full border-l border-[#ccecee] ml-1 sm:ml-2 overflow-x-auto whitespace-nowrap scrollbar-none flex-nowrap shrink max-w-[220px] xs:max-w-[280px] sm:max-w-none">
             <button
               onClick={() => setActiveTab("live")}
               className={`px-2 sm:px-3 text-[9px] sm:text-[9.5px] shrink-0 font-bold tracking-wider uppercase h-full transition-all border-r border-slate-100 font-mono ${
@@ -2874,86 +2876,104 @@ export default function App() {
       )}
 
       {/* --- CLINICAL OPERATIONS AND CONTROLS CONSOLE BAR --- */}
-      <div id="controls-bar" className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-3 z-10 text-[9.5px] shrink-0 font-mono shadow-sm">
-        <div className="flex items-center space-x-3">
-          <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center space-x-1">
-            <Activity size={12} className="text-emerald-600 animate-pulse" />
-            <span>Clinical Simulation Drift Control:</span>
-          </span>
-          {/* Pause / Resume buttons */}
-          <div className="flex bg-white border border-slate-250 rounded-sm p-0.5 shadow-sm">
-            <button
-              onClick={() => {
-                setIsDriftPaused(false);
-                setDatasetSuccess("Telemetry simulation drift values resumed successfully.");
-              }}
-              className={`px-3 py-1 font-bold rounded-sm cursor-pointer transition-all ${!isDriftPaused ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-[#F8FAFC]'}`}
-            >
-              RUN SIMULATION
-            </button>
-            <button
-              onClick={() => {
-                setIsDriftPaused(true);
-                setDatasetSuccess("Telemetry data streams frozen (Simulation drift paused). Feel free to inspect metrics safely.");
-              }}
-              className={`px-3 py-1 font-bold rounded-sm cursor-pointer transition-all ${isDriftPaused ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-600 hover:bg-[#F8FAFC]'}`}
-            >
-              FREEZE STREAMS
-            </button>
+      <div id="controls-bar" className="bg-slate-50 border-b border-slate-200 px-4 py-2 z-10 text-[9.5px] shrink-0 font-mono shadow-sm">
+        
+        {/* Mobile Header with Toggle */}
+        <div className="flex items-center justify-between md:hidden">
+          <div className="flex items-center space-x-1.5 font-bold text-slate-700 uppercase tracking-wider">
+            <Activity size={12} className="text-[#14967f] animate-pulse shrink-0" />
+            <span>Clinical Vitals Simulator</span>
           </div>
+          <button
+            onClick={() => setIsControlsBarExpanded(!isControlsBarExpanded)}
+            className="px-2.5 py-1 bg-custom-navy text-white text-[8px] font-black uppercase rounded-sm border border-custom-navy transition-all cursor-pointer"
+          >
+            {isControlsBarExpanded ? "Collapse ▲" : "Expand Controls ▼"}
+          </button>
         </div>
 
-        <div className="flex items-center space-x-3 flex-wrap">
-          {/* Quick Vital Inj. for live monitor selected patient */}
-          <div className="flex items-center space-x-1.5 bg-white border border-slate-250 px-2 py-1 rounded-sm shadow-sm">
-            <span className="text-slate-500 uppercase font-bold text-[8.5px]">Inject HR (BPM):</span>
-            <input
-              type="number"
-              value={activePatient.hr}
-              onChange={(e) => {
-                const val = Math.max(30, Math.min(220, parseInt(e.target.value) || 80));
-                setPatients(prev => prev.map(p => p.id === activePatientId ? { ...p, hr: val } : p));
-                setDatasetSuccess(`Injected custom Heart Rate of ${val} BPM for active patient ${activePatient.name}`);
-              }}
-              className="w-12 text-center bg-[#F8FAFC] border border-slate-300 text-slate-900 font-bold font-mono focus:outline-none py-0.5 rounded-sm"
-            />
+        {/* Content wrapper: hidden on mobile unless toggled, always flex on desktop */}
+        <div className={`${isControlsBarExpanded ? "flex" : "hidden"} md:flex flex-col md:flex-row md:items-center md:justify-between gap-3 mt-2 md:mt-0`}>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center space-x-1">
+              <Activity size={12} className="text-[#14967f] animate-pulse shrink-0" />
+              <span>Clinical Simulation Drift Control:</span>
+            </span>
+            {/* Pause / Resume buttons */}
+            <div className="flex bg-white border border-slate-250 rounded-sm p-0.5 shadow-sm max-w-max">
+              <button
+                onClick={() => {
+                  setIsDriftPaused(false);
+                  setDatasetSuccess("Telemetry simulation drift values resumed successfully.");
+                }}
+                className={`px-3 py-1 font-bold rounded-sm cursor-pointer transition-all text-[8.5px] ${!isDriftPaused ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-[#F8FAFC]'}`}
+              >
+                RUN SIMULATION
+              </button>
+              <button
+                onClick={() => {
+                  setIsDriftPaused(true);
+                  setDatasetSuccess("Telemetry data streams frozen (Simulation drift paused). Feel free to inspect metrics safely.");
+                }}
+                className={`px-3 py-1 font-bold rounded-sm cursor-pointer transition-all text-[8.5px] ${isDriftPaused ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-600 hover:bg-[#F8FAFC]'}`}
+              >
+                FREEZE STREAMS
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center space-x-1.5 bg-white border border-slate-250 px-2 py-1 rounded-sm shadow-sm">
-            <span className="text-slate-500 uppercase font-bold text-[8.5px]">SpO₂ (%):</span>
-            <input
-              type="number"
-              value={activePatient.spo2}
-              onChange={(e) => {
-                const val = Math.max(50, Math.min(100, parseInt(e.target.value) || 98));
-                setPatients(prev => prev.map(p => p.id === activePatientId ? { ...p, spo2: val } : p));
-                setDatasetSuccess(`Injected custom SpO₂ of ${val}% for active patient ${activePatient.name}`);
-              }}
-              className="w-12 text-center bg-[#F8FAFC] border border-slate-300 text-slate-900 font-bold font-mono focus:outline-none py-0.5 rounded-sm"
-            />
-          </div>
+          <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+            {/* Quick Vital Inj. for live monitor selected patient */}
+            <div className="flex items-center space-x-1.5 bg-white border border-slate-250 px-2 py-1 rounded-sm shadow-sm">
+              <span className="text-slate-500 uppercase font-bold text-[8.5px]">Inject HR (BPM):</span>
+              <input
+                type="number"
+                value={activePatient.hr}
+                onChange={(e) => {
+                  const val = Math.max(30, Math.min(220, parseInt(e.target.value) || 80));
+                  setPatients(prev => prev.map(p => p.id === activePatientId ? { ...p, hr: val } : p));
+                  setDatasetSuccess(`Injected custom Heart Rate of ${val} BPM for active patient ${activePatient.name}`);
+                }}
+                className="w-12 text-center bg-[#F8FAFC] border border-slate-300 text-slate-900 font-bold font-mono focus:outline-none py-0.5 rounded-sm"
+              />
+            </div>
 
-          {/* Core undo button */}
-          <button
-            onClick={() => {
-              setPatients(initialPatients);
-              setActivePatientId("P108");
-              setLoadedDatasetName("System Default Simulator Patients");
-              setLrWeights({});
-              setLrBias(0);
-              setLrAccuracy(null);
-              setLrConfusionMatrix(null);
-              setLrLossHistory([]);
-              setLrPredictionScore(null);
-              setDatasetSuccess("Reverted ICU ward database & machine learning weights back to baseline pristine defaults!");
-              setDatasetError(null);
-            }}
-            className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 border border-slate-300 text-slate-800 font-bold uppercase transition-all rounded-sm flex items-center space-x-1 cursor-pointer shadow-sm"
-            title="Instant easy reversal: reverts all parameters, patient details, and simulation to default system state."
-          >
-            <RefreshCw size={11} className="mr-0.5" />
-            <span>Reset Database Defaults</span>
-          </button>
+            <div className="flex items-center space-x-1.5 bg-white border border-[#ccecee] px-2 py-1 rounded-sm shadow-sm">
+              <span className="text-slate-500 uppercase font-bold text-[8.5px]">SpO₂ (%):</span>
+              <input
+                type="number"
+                value={activePatient.spo2}
+                onChange={(e) => {
+                  const val = Math.max(50, Math.min(100, parseInt(e.target.value) || 98));
+                  setPatients(prev => prev.map(p => p.id === activePatientId ? { ...p, spo2: val } : p));
+                  setDatasetSuccess(`Injected custom SpO₂ of ${val}% for active patient ${activePatient.name}`);
+                }}
+                className="w-12 text-center bg-[#F8FAFC] border border-slate-300 text-slate-900 font-bold font-mono focus:outline-none py-0.5 rounded-sm"
+              />
+            </div>
+
+            {/* Core undo button */}
+            <button
+              onClick={() => {
+                setPatients(initialPatients);
+                setActivePatientId("P108");
+                setLoadedDatasetName("System Default Simulator Patients");
+                setLrWeights({});
+                setLrBias(0);
+                setLrAccuracy(null);
+                setLrConfusionMatrix(null);
+                setLrLossHistory([]);
+                setLrPredictionScore(null);
+                setDatasetSuccess("Reverted ICU ward database & machine learning weights back to baseline pristine defaults!");
+                setDatasetError(null);
+              }}
+              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-350 border border-slate-300 text-slate-800 font-bold uppercase transition-all rounded-sm flex items-center space-x-1 cursor-pointer shadow-sm text-[8.5px]"
+              title="Instant easy reversal: reverts all parameters, patient details, and simulation to default system state."
+            >
+              <RefreshCw size={11} className="mr-0.5 shrink-0" />
+              <span>Reset Database Defaults</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2993,39 +3013,39 @@ export default function App() {
               <div className="flex flex-col h-full bg-[#F8FAFC]">
                 
                 {/* Question 1: WHO IS CRITICAL? (Hospital Statistics top panel) */}
-                <div className="p-4 pb-2 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 shrink-0">
-                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between">
+                <div className="p-4 pb-2 flex flex-row overflow-x-auto md:grid md:grid-cols-3 gap-3 md:gap-4 shrink-0 scrollbar-none">
+                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between shrink-0 min-w-[220px] md:min-w-0 flex-1">
                     <div>
                       <span className="text-[10px] font-bold tracking-wider text-custom-navy uppercase font-mono">Critical Priority</span>
                       <h4 className="text-[22px] font-extrabold text-[#DC2626] font-sans leading-tight mt-0.5">
                         {patients.filter(p => p.priority === "Critical").length} Patients
                       </h4>
                     </div>
-                    <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 border border-red-200">
+                    <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 border border-red-200 shrink-0 ml-3">
                       <ShieldAlert size={18} className="animate-pulse" />
                     </div>
                   </div>
 
-                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between">
+                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between shrink-0 min-w-[220px] md:min-w-0 flex-1">
                     <div>
                       <span className="text-[10px] font-bold tracking-wider text-custom-navy uppercase font-mono">High Risk</span>
                       <h4 className="text-[22px] font-extrabold text-[#F97316] font-sans leading-tight mt-0.5">
                         {patients.filter(p => p.priority === "High Risk").length} Patients
                       </h4>
                     </div>
-                    <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center text-[#F97316] border border-amber-200">
+                    <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center text-[#F97316] border border-amber-200 shrink-0 ml-3">
                       <AlertTriangle size={18} />
                     </div>
                   </div>
 
-                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between">
+                  <div className="bg-white border-2 border-custom-navy p-3.5 shadow-md rounded-md flex items-center justify-between shrink-0 min-w-[220px] md:min-w-0 flex-1">
                     <div>
                       <span className="text-[10px] font-bold tracking-wider text-custom-navy uppercase font-mono">Stable / Under Watch</span>
                       <h4 className="text-[22px] font-extrabold text-custom-teal font-sans leading-tight mt-0.5">
                         {patients.filter(p => p.priority === "Stable" || p.priority === "Moderate").length} Patients
                       </h4>
                     </div>
-                    <div className="h-10 w-10 rounded-full bg-emerald-100 flex items-center justify-center text-custom-teal border border-emerald-200">
+                    <div className="h-10 w-10 rounded-full bg-emerald-100 flex items-center justify-center text-custom-teal border border-emerald-200 shrink-0 ml-3">
                       <CheckCircle size={18} />
                     </div>
                   </div>
@@ -3065,11 +3085,50 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Mobile-only Sub-Tab Switcher */}
+                <div className="mx-4 mb-2 flex xl:hidden border-2 border-custom-navy rounded-lg p-0.5 bg-white shadow-sm overflow-hidden select-none shrink-0">
+                  <button
+                    onClick={() => setMobileLiveSubTab("queue")}
+                    className={`flex-1 py-2 text-[10px] font-black uppercase tracking-wider rounded-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      mobileLiveSubTab === "queue"
+                        ? "bg-custom-navy text-white"
+                        : "text-custom-navy hover:bg-custom-ice"
+                    }`}
+                  >
+                    <span>📋</span>
+                    <span>Queue ({patients.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setMobileLiveSubTab("cockpit")}
+                    className={`flex-1 py-2 text-[10px] font-black uppercase tracking-wider rounded-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      mobileLiveSubTab === "cockpit"
+                        ? "bg-custom-navy text-white"
+                        : "text-custom-navy hover:bg-custom-ice"
+                    }`}
+                  >
+                    <span>🏥</span>
+                    <span>Cockpit</span>
+                  </button>
+                  <button
+                    onClick={() => setMobileLiveSubTab("beds")}
+                    className={`flex-1 py-2 text-[10px] font-black uppercase tracking-wider rounded-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      mobileLiveSubTab === "beds"
+                        ? "bg-custom-navy text-white"
+                        : "text-custom-navy hover:bg-custom-ice"
+                    }`}
+                  >
+                    <span>📊</span>
+                    <span>Ward Beds</span>
+                  </button>
+                </div>
+
                 {/* MAIN CONTENT SPLIT GRID */}
-                <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 p-4 pt-2 min-h-0">
+                <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 p-4 pt-2 min-h-0 animate-fade-in">
                   
                   {/* Question 2: Which patient should I see first? (Left-side queue, 3/12 cols) */}
-                  <div className="xl:col-span-3 bg-white border-2 border-custom-navy p-3 flex flex-col h-[520px] xl:h-full rounded-md shadow-md overflow-hidden">
+                  <div className={`xl:col-span-3 bg-white border-2 border-custom-navy p-3 flex flex-col h-[520px] xl:h-full rounded-md shadow-md overflow-hidden ${
+                    mobileLiveSubTab === "queue" ? "flex" : "hidden xl:flex"
+                  }`}>
                     <div className="mb-2 shrink-0">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold text-custom-teal uppercase tracking-wider font-mono">PRIORITY QUEUE</span>
@@ -3133,7 +3192,9 @@ export default function App() {
                   </div>
 
                   {/* Question 3: Why is patient critical? (Center detail view, 6/12 cols) */}
-                  <div className="xl:col-span-6 bg-white border-2 border-custom-navy p-4 rounded-md shadow-md flex flex-col overflow-y-auto">
+                  <div className={`xl:col-span-6 bg-white border-2 border-custom-navy p-4 rounded-md shadow-md flex flex-col overflow-y-auto ${
+                    mobileLiveSubTab === "cockpit" ? "flex" : "hidden xl:flex"
+                  }`}>
                     <div className="border-b border-slate-200 pb-3 mb-3 shrink-0">
                       <div className="flex flex-wrap justify-between items-center gap-2 font-mono">
                         <div className="flex items-center space-x-2">
@@ -3730,7 +3791,9 @@ export default function App() {
                   </div>
 
                   {/* Operations column (Right, 3/12 cols) */}
-                  <div className="xl:col-span-3 flex flex-col gap-4 text-slate-800 h-full">
+                  <div className={`xl:col-span-3 flex flex-col gap-4 text-slate-800 h-full ${
+                    mobileLiveSubTab === "beds" ? "flex" : "hidden xl:flex"
+                  }`}>
                     
                     {/* ICU Command Center Matrix Grid */}
                     <div className="bg-white border-2 border-custom-navy p-3 rounded-md shadow-md flex flex-col">
@@ -3865,6 +3928,10 @@ export default function App() {
           {/* TAB 2: MULTIPLE PATIENTS BOARD TABLE */}
           {activeTab === "table" && (
             <div className="p-4 flex flex-col h-full bg-[#F8FAFC] text-slate-800">
+              {/* Mobile Swipe Left/Right Hint Banner */}
+              <div className="block md:hidden bg-[#ccecee] text-[#095d7e] border border-[#14967f]/30 p-2 rounded-sm text-[9px] font-bold font-mono mb-3">
+                👈 SWIPE LEFT/RIGHT ON THE CLINICAL MATRIX BELOW TO VIEW ALL TELEMETRY VARIABLES
+              </div>
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 pb-3 border-b border-slate-200">
                 <div>
                   <h2 className="text-xs font-bold tracking-widest text-[#EA580C] uppercase font-mono">Simulated Ward Patients</h2>
