@@ -36,23 +36,45 @@ function getAIClient(): GoogleGenAI {
   return aiClient;
 }
 
-// Robust retry mechanism with exponential backoff for handling 503 "UNAVAILABLE" spikes
-async function generateWithRetry(callFn: () => Promise<any>, retries: number = 2, delayMs: number = 800): Promise<any> {
-  let attempt = 0;
-  while (attempt <= retries) {
-    try {
-      return await callFn();
-    } catch (err: any) {
-      const is503 = err.message && (err.message.includes("503") || err.message.toLowerCase().includes("unavailable") || err.message.toLowerCase().includes("demand"));
-      console.warn(`Gemini generation failed (attempt ${attempt + 1}/${retries + 1}, is503: ${is503}):`, err.message || err);
-      if (attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
-        attempt++;
-      } else {
-        throw err;
+// Robust retry mechanism with model fallbacks to handle 503 UNAVAILABLE or demand spikes gracefully
+async function generateWithModelFallbackAndRetry(
+  ai: GoogleGenAI,
+  params: any,
+  modelChain: string[] = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+): Promise<any> {
+  let lastError: any = null;
+  
+  for (const model of modelChain) {
+    let attempt = 0;
+    const retries = 1; // 1 retry per model to keep latency low
+    const delayMs = 500;
+    
+    while (attempt <= retries) {
+      try {
+        console.info(`[AI Client] Attempting generation using model ${model} (attempt ${attempt + 1}/${retries + 1})...`);
+        const result = await ai.models.generateContent({
+          ...params,
+          model,
+        });
+        console.info(`[AI Client] Generation successful using model ${model}.`);
+        return result;
+      } catch (err: any) {
+        lastError = err;
+        const is503 = err.message && (err.message.includes("503") || err.message.toLowerCase().includes("unavailable") || err.message.toLowerCase().includes("demand"));
+        console.info(`[AI Client] Attempt ${attempt + 1} with model ${model} did not succeed (is503: ${is503}).`);
+        
+        if (attempt < retries) {
+          await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
+          attempt++;
+        } else {
+          break; // Try the next model in the chain
+        }
       }
     }
   }
+  
+  // If we reach here, all models in the chain failed.
+  throw lastError || new Error("All models in the fallback chain were unavailable.");
 }
 
 // Medically grounded fallback predictor matching clinical qSOFA / SIRS assessment rules
@@ -374,42 +396,39 @@ async function startServer() {
       Task: Run a multi-variable diagnostic simulation to assess risk progression. Return clinical classification metrics, severity indicators, explainable reasoning for weights, and responsive treatment recommendation guides. Let's do this sequentially and with strict clinical rigor.`;
 
       const ai = getAIClient();
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            systemInstruction: `You are an expert full-stack clinical decision support expert system, similar to EPIC clinical models or early-warning TREWS tools. Analyze the patient parameters with absolute accuracy. Check thresholds (e.g. SBP < 90 is hypotensive, Temp > 38.3 is febrile, SpO2 < 92 is hypoxemic, HR > 100 is tachycardic, etc.). Ground your predictions in real ICU medicine guidelines (SIRS, qSOFA, NYHA, WHO ACOG). Return detailed JSON matching the exact schema definition. Determine riskScore as a number between 0 and 100 indicating likelihood of sepsis, cardiac arrest, or maternal preeclampsia depending on cohort context.`,
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                riskScore: { type: Type.NUMBER, description: "Probability of clinical warning event from 0 to 100 percentage" },
-                priority: { type: Type.STRING, description: "Category: Stable, Moderate, High Risk, or Critical" },
-                diagnosis: { type: Type.STRING, description: "Refined clinical assessment or syndrome alert tag" },
-                reasoning: { type: Type.STRING, description: "Clinical analysis grounding the risk score against vitals thresholds and guidelines" },
-                recommendations: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "Actionable nurse guidelines: fluids, blood cultures, EKG, specialist consultation, or direct actions"
-                },
-                featureImportance: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      feature: { type: Type.STRING },
-                      importance: { type: Type.NUMBER, description: "Normalized influence factor of this metric from -1.0 to 1.0 (positive increases risk, negative decreases)" }
-                    },
-                    required: ["feature", "importance"]
-                  },
-                  description: "Explanatory metrics weight overview"
-                }
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: `You are an expert full-stack clinical decision support expert system, similar to EPIC clinical models or early-warning TREWS tools. Analyze the patient parameters with absolute accuracy. Check thresholds (e.g. SBP < 90 is hypotensive, Temp > 38.3 is febrile, SpO2 < 92 is hypoxemic, HR > 100 is tachycardic, etc.). Ground your predictions in real ICU medicine guidelines (SIRS, qSOFA, NYHA, WHO ACOG). Return detailed JSON matching the exact schema definition. Determine riskScore as a number between 0 and 100 indicating likelihood of sepsis, cardiac arrest, or maternal preeclampsia depending on cohort context.`,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              riskScore: { type: Type.NUMBER, description: "Probability of clinical warning event from 0 to 100 percentage" },
+              priority: { type: Type.STRING, description: "Category: Stable, Moderate, High Risk, or Critical" },
+              diagnosis: { type: Type.STRING, description: "Refined clinical assessment or syndrome alert tag" },
+              reasoning: { type: Type.STRING, description: "Clinical analysis grounding the risk score against vitals thresholds and guidelines" },
+              recommendations: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Actionable nurse guidelines: fluids, blood cultures, EKG, specialist consultation, or direct actions"
               },
-              required: ["riskScore", "priority", "diagnosis", "reasoning", "recommendations", "featureImportance"]
-            }
+              featureImportance: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    feature: { type: Type.STRING },
+                    importance: { type: Type.NUMBER, description: "Normalized influence factor of this metric from -1.0 to 1.0 (positive increases risk, negative decreases)" }
+                  },
+                  required: ["feature", "importance"]
+                },
+                description: "Explanatory metrics weight overview"
+              }
+            },
+            required: ["riskScore", "priority", "diagnosis", "reasoning", "recommendations", "featureImportance"]
           }
-        });
+        }
       });
 
       const responseText = response.text;
@@ -446,14 +465,11 @@ async function startServer() {
       - Return the text in the requested script/alphabet style (e.g. Tamil characters for Tamil, Hindi script for Hindi, etc.).`;
 
       const ai = getAIClient();
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            systemInstruction: "You are the CareSync AI Multilingual Companion. You translate complex medical drug prescriptions into extremely warm, easy-to-understand, supportive vocal blocks in non-English native languages (Tamil, Hindi, Telugu, Malayalam) or English.",
-          }
-        });
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync AI Multilingual Companion. You translate complex medical drug prescriptions into extremely warm, easy-to-understand, supportive vocal blocks in non-English native languages (Tamil, Hindi, Telugu, Malayalam) or English.",
+        }
       });
 
       res.json({ success: true, text: response.text || "" });
@@ -486,27 +502,24 @@ async function startServer() {
         text: textQuery || "A patient shows this medicine pill. Identify this tablet. Return standard Name & strength, Color, Shape, dosage, and food safety guideline in structural JSON."
       });
 
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: contents,
-          config: {
-            systemInstruction: "You are the CareSync Pill Recognition Engine. Inspect the provided image or physical description. Perform a high-fidelity image match, then output JSON fitting the requested schema perfectly.",
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                medicine: { type: Type.STRING, description: "Official pharmaceutical name and standard milligram dose, e.g. Metformin 500mg, Aspirin 75mg, or Atorvastatin 20mg" },
-                color: { type: Type.STRING, description: "The color of the tablet, e.g., White, Red, Blue, Yellow" },
-                shape: { type: Type.STRING, description: "The physical shape, e.g., round, oval, capsule, hexagonal" },
-                dosage: { type: Type.STRING, description: "Prescription dosage, e.g., Take 1 tablet" },
-                purpose: { type: Type.STRING, description: "Primary medical use in simple patient terms, e.g. controls blood sugar levels, prevents blood clots, or lowers cholesterol" },
-                food: { type: Type.STRING, description: "Timing guideline, e.g., Take after breakfast, Take with water before lunch, or Take before bed" }
-              },
-              required: ["medicine", "color", "shape", "dosage", "purpose", "food"]
-            }
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: contents,
+        config: {
+          systemInstruction: "You are the CareSync Pill Recognition Engine. Inspect the provided image or physical description. Perform a high-fidelity image match, then output JSON fitting the requested schema perfectly.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              medicine: { type: Type.STRING, description: "Official pharmaceutical name and standard milligram dose, e.g. Metformin 500mg, Aspirin 75mg, or Atorvastatin 20mg" },
+              color: { type: Type.STRING, description: "The color of the tablet, e.g., White, Red, Blue, Yellow" },
+              shape: { type: Type.STRING, description: "The physical shape, e.g., round, oval, capsule, hexagonal" },
+              dosage: { type: Type.STRING, description: "Prescription dosage, e.g., Take 1 tablet" },
+              purpose: { type: Type.STRING, description: "Primary medical use in simple patient terms, e.g. controls blood sugar levels, prevents blood clots, or lowers cholesterol" },
+              food: { type: Type.STRING, description: "Timing guideline, e.g., Take after breakfast, Take with water before lunch, or Take before bed" }
+            },
+            required: ["medicine", "color", "shape", "dosage", "purpose", "food"]
           }
-        });
+        }
       });
 
       const text = response.text;
@@ -537,14 +550,11 @@ async function startServer() {
       - Be exceptionally encouraging and respectful.`;
 
       const ai = getAIClient();
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            systemInstruction: "You are the CareSync Home Companion chatbot, answering questions for elderly patients with supreme medical safety, professional warmth, and clarity."
-          }
-        });
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync Home Companion chatbot, answering questions for elderly patients with supreme medical safety, professional warmth, and clarity."
+        }
       });
 
       res.json({ success: true, text: response.text || "" });
@@ -606,14 +616,11 @@ async function startServer() {
       - Provide exactly 3 specific, actionable recommendations for the incoming nurse (e.g., fluid titration, bedside positioning, laboratory draws).
       - Maintain a professional and serious clinical tone.`;
 
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            systemInstruction: "You are the CareSync Clinical Automation Engine. Generate beautifully formatted Markdown clinical handover reports.",
-          }
-        });
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync Clinical Automation Engine. Generate beautifully formatted Markdown clinical handover reports.",
+        }
       });
 
       res.json({ success: true, text: response.text || fallbackHandover });
@@ -651,44 +658,41 @@ async function startServer() {
       3. Clinical summary/diagnostics: A summary of the patient status based on the notes.
       4. Suggested clinical orders (Exactly 2-3 bullet items) for approval by the physician.`;
 
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            systemInstruction: "You are the CareSync Clinical Parser. Extract key medical indices and return them in structured JSON format matching the schema perfectly.",
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                vitals: {
-                  type: Type.OBJECT,
-                  properties: {
-                    hr: { type: Type.NUMBER, description: "Extracted Heart rate in bpm" },
-                    spo2: { type: Type.NUMBER, description: "Extracted SpO2 level in percentage" },
-                    bp: { type: Type.STRING, description: "Extracted Blood Pressure, e.g. 120/80" },
-                    rr: { type: Type.NUMBER, description: "Extracted Respiratory rate" }
-                  }
-                },
-                checklistUpdates: {
-                  type: Type.OBJECT,
-                  properties: {
-                    sepsisScreen: { type: Type.BOOLEAN, description: "True if sepsis screening or assessment is mentioned as completed" },
-                    bedsideSafety: { type: Type.BOOLEAN, description: "True if bedside safety, bed rails, or patient position checks are completed" },
-                    hourlyRounds: { type: Type.BOOLEAN, description: "True if hourly checks or rounds are completed" }
-                  }
-                },
-                diagnostics: { type: Type.STRING, description: "Professional medical summary of active findings in the note" },
-                orders: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "List of recommended next steps or nursing orders for approval"
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync Clinical Parser. Extract key medical indices and return them in structured JSON format matching the schema perfectly.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              vitals: {
+                type: Type.OBJECT,
+                properties: {
+                  hr: { type: Type.NUMBER, description: "Extracted Heart rate in bpm" },
+                  spo2: { type: Type.NUMBER, description: "Extracted SpO2 level in percentage" },
+                  bp: { type: Type.STRING, description: "Extracted Blood Pressure, e.g. 120/80" },
+                  rr: { type: Type.NUMBER, description: "Extracted Respiratory rate" }
                 }
               },
-              required: ["vitals", "checklistUpdates", "diagnostics", "orders"]
-            }
+              checklistUpdates: {
+                type: Type.OBJECT,
+                properties: {
+                  sepsisScreen: { type: Type.BOOLEAN, description: "True if sepsis screening or assessment is mentioned as completed" },
+                  bedsideSafety: { type: Type.BOOLEAN, description: "True if bedside safety, bed rails, or patient position checks are completed" },
+                  hourlyRounds: { type: Type.BOOLEAN, description: "True if hourly checks or rounds are completed" }
+                }
+              },
+              diagnostics: { type: Type.STRING, description: "Professional medical summary of active findings in the note" },
+              orders: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "List of recommended next steps or nursing orders for approval"
+              }
+            },
+            required: ["vitals", "checklistUpdates", "diagnostics", "orders"]
           }
-        });
+        }
       });
 
       const parsed = JSON.parse(response.text.trim());
@@ -722,29 +726,26 @@ async function startServer() {
       - Next Best Bedside Action (actionable, medically specific).
       - Brief Clinical Explanation justifying this urgency based on their vital parameters.`;
 
-      const response = await generateWithRetry(async () => {
-        return await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            systemInstruction: "You are the CareSync Ward Triage Coordinator. Recommend smart prioritization guidelines based on early warning clinical telemetry. Return structured JSON matching the schema.",
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  bedId: { type: Type.STRING },
-                  name: { type: Type.STRING },
-                  priority: { type: Type.STRING, description: "e.g. 1st Priority, 2nd Priority, 3rd Priority" },
-                  action: { type: Type.STRING, description: "Next best nursing action at bedside" },
-                  explanation: { type: Type.STRING, description: "Clinical reasoning grounding the triage priority" }
-                },
-                required: ["bedId", "name", "priority", "action", "explanation"]
-              }
+      const response = await generateWithModelFallbackAndRetry(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction: "You are the CareSync Ward Triage Coordinator. Recommend smart prioritization guidelines based on early warning clinical telemetry. Return structured JSON matching the schema.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                bedId: { type: Type.STRING },
+                name: { type: Type.STRING },
+                priority: { type: Type.STRING, description: "e.g. 1st Priority, 2nd Priority, 3rd Priority" },
+                action: { type: Type.STRING, description: "Next best nursing action at bedside" },
+                explanation: { type: Type.STRING, description: "Clinical reasoning grounding the triage priority" }
+              },
+              required: ["bedId", "name", "priority", "action", "explanation"]
             }
           }
-        });
+        }
       });
 
       const parsed = JSON.parse(response.text.trim());
